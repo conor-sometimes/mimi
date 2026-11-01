@@ -124,44 +124,54 @@ pub fn filename_str(filename: &[u8]) -> String {
     String::from_utf8_lossy(&filename[..len]).into_owned()
 }
 
-/// Render one exec event as mimi's own versioned wire JSON -- the schema banken ingests through its
-/// `mimi` parser (see `crate::SCHEMA`). This JSON is the contract; the shared fixture is a copy of
-/// this output, tested on both sides so the repos cannot drift. `time` is the wall-clock RFC3339
-/// stamp the loader derives from the monotonic `time_ns` (kept as `capture_ns` for latency).
+/// The last path segment (OCSF file.name alongside file.path).
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Render one exec event in the OCSF-shaped schema banken ingests through its `mimi` parser (see
+/// `crate::SCHEMA`). The `process` object matches banken's own OCSF process object exactly
+/// (pid / name / cmd_line / file{path,name} / user{uid} / parent_process), so the two map with no
+/// translation; `ancestry` is mimi's extension (the full chain, its headline). This JSON is the
+/// contract; the shared fixture is a byte-for-byte copy, tested on both sides so the repos cannot
+/// drift. `time` is the wall-clock RFC3339 stamp the loader derives from the monotonic `time_ns`
+/// (kept as `capture_ns` for latency).
 pub fn render_mimi(lin: &Lineage, time: &str) -> String {
     let n = (lin.count as usize).min(lin.chain.len());
+    let image = filename_str(&lin.filename);
     let mut s = format!(
-        r#"{{"schema":"{}","kind":"exec","time":"{}","capture_ns":{},"process":{{"#,
+        r#"{{"schema":"{}","kind":"exec","time":"{}","capture_ns":{},"activity_id":1,"cmdline_truncated":{},"process":{{"#,
         crate::SCHEMA,
         json_escape(time),
         lin.time_ns,
+        lin.argv_total_len > lin.cmdline_len,
     );
     if n > 0 {
         let p = &lin.chain[0];
         s.push_str(&format!(
-            r#""name":"{}","pid":{},"uid":{},"gid":{},"image":"{}","cmdline":"{}","cmdline_truncated":{}"#,
-            json_escape(&comm_str(&p.comm)),
+            r#""pid":{},"name":"{}","cmd_line":"{}","file":{{"path":"{}","name":"{}"}},"user":{{"uid":"{}","gid":"{}"}}"#,
             p.pid,
+            json_escape(&comm_str(&p.comm)),
+            json_escape(&cmdline_str(lin)),
+            json_escape(&image),
+            json_escape(basename(&image)),
             lin.uid,
             lin.gid,
-            json_escape(&filename_str(&lin.filename)),
-            json_escape(&cmdline_str(lin)),
-            lin.argv_total_len > lin.cmdline_len,
         ));
+        if n > 1 {
+            let par = &lin.chain[1];
+            s.push_str(&format!(
+                r#","parent_process":{{"pid":{},"name":"{}"}}"#,
+                par.pid,
+                json_escape(&comm_str(&par.comm)),
+            ));
+        }
     }
     s.push('}'); // close "process"
-    if n > 1 {
-        let par = &lin.chain[1];
-        s.push_str(&format!(
-            r#","parent":{{"name":"{}","pid":{}}}"#,
-            json_escape(&comm_str(&par.comm)),
-            par.pid,
-        ));
-    }
     s.push_str(r#","ancestry":["#);
     let anc: Vec<String> = lin.chain[..n]
         .iter()
-        .map(|a| format!(r#"{{"name":"{}","pid":{}}}"#, json_escape(&comm_str(&a.comm)), a.pid))
+        .map(|a| format!(r#"{{"pid":{},"name":"{}"}}"#, a.pid, json_escape(&comm_str(&a.comm))))
         .collect();
     s.push_str(&anc.join(","));
     s.push_str("]}");

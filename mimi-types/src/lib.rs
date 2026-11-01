@@ -18,7 +18,7 @@ pub const FILENAME_LEN: usize = 256;
 
 /// The wire schema version, emitted in every event. The consumer (banken) checks it and refuses or
 /// downgrades on skew, so the two repos can evolve without silently misreading each other's bytes.
-pub const SCHEMA: &str = "mimi/1";
+pub const SCHEMA: &str = "mimi/2";
 
 /// One process in the ancestry chain.
 #[repr(C)]
