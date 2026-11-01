@@ -1,4 +1,5 @@
 use aya::{maps::RingBuf, programs::TracePoint};
+use std::io::{self, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // mimi: load the probe, attach it to sched_process_exec, and emit each exec event. The probe and
@@ -14,10 +15,27 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // Read CLOCK_MONOTONIC in nanoseconds (the clock the probe's bpf_ktime_get_ns stamps).
 fn monotonic_ns() -> i128 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     // SAFETY: clock_gettime writes a valid timespec for a valid clock id.
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     ts.tv_sec as i128 * 1_000_000_000 + ts.tv_nsec as i128
+}
+
+// Whether a stdout write/flush means the consumer is gone and the sensor should stop. BrokenPipe is
+// the normal "the reader closed" signal: exit 0, no crash-loop under Restart=on-failure. Any other
+// write error means the sink is unusable (a full disk, say), so log it and stop too rather than spin.
+fn is_gone(r: io::Result<()>) -> bool {
+    match r {
+        Ok(()) => false,
+        Err(ref e) if e.kind() == io::ErrorKind::BrokenPipe => true,
+        Err(e) => {
+            eprintln!("mimi: stdout write failed ({e}); stopping");
+            true
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -55,19 +73,29 @@ fn main() -> anyhow::Result<()> {
     let mut last_drops = 0u64;
     eprintln!("mimi: watching execs. Ctrl-C to stop.");
 
+    // Hold the stdout lock for the whole run and write through it, so a consumer that goes away
+    // (the sink file closed, a tail pipe whose reader exits) surfaces as a BrokenPipe we exit on
+    // cleanly rather than the panic `println!` raises -- under the unit's Restart=on-failure a panic
+    // would crash-loop the sensor. Flush after each drain so a file sink banken tails sees every
+    // batch promptly (stdout is block-buffered to a file), not only when an 8K buffer fills.
+    let mut out = io::stdout().lock();
+
     loop {
         while let Some(item) = ring.next() {
             if let Some(lin) = mimi_types::parse(&item) {
-                let out = if text {
+                let line = if text {
                     mimi_types::render_text(&lin)
                 } else {
                     let wall = (offset_ns + lin.time_ns as i128).max(0) as u128;
                     mimi_types::render_mimi(&lin, &mimi_types::rfc3339_utc(wall))
                 };
-                if !out.is_empty() {
-                    println!("{out}");
+                if !line.is_empty() && is_gone(writeln!(out, "{line}")) {
+                    return Ok(());
                 }
             }
+        }
+        if is_gone(out.flush()) {
+            return Ok(());
         }
         if let Ok(per_cpu) = drops.get(&0, 0) {
             let total: u64 = per_cpu.iter().sum();
