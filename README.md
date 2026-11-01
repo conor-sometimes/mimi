@@ -11,8 +11,9 @@ to `sched_process_exec` and, for every exec, captures the executable path, argv,
 full ancestry (walking `task_struct->real_parent` to pid 1), and emits them as one OCSF-shaped JSON
 line banken ingests directly. One self-contained binary - aya embeds the BPF object - **no C**: the
 probe and the loader are both Rust. The probe assembles the event in a per-CPU scratch map (off the
-512-byte BPF stack) and counts any ring-buffer drops. (The live load on 6.x is the one step that
-still needs a privileged run; everything up to it is built and tested.)
+512-byte BPF stack) and counts any ring-buffer drops. Proven live on 6.18.59: a privileged load
+captured a real exec (correct pid, comm, full argv, parent and executable path, via CO-RE offsets),
+banken fired a rule on the mimi-sourced event, and the capture-to-match latency was ~30 ms.
 
 ## Architecture
 

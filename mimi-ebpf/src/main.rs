@@ -33,9 +33,8 @@ fn off(idx: u32) -> usize {
 //   common_type u16 @0, common_flags u8 @2, common_preempt_count u8 @3, common_pid i32 @4,
 //   __data_loc char[] filename u32 @8, pid i32 @12, old_pid i32 @16.
 // A __data_loc is (len << 16) | offset, the offset being from the start of the record (= the
-// tracepoint ctx pointer), so the path lives at ctx + (loc & 0xffff).
-// TODO: confirm on a live kernel (`cat /sys/kernel/tracing/events/sched/sched_process_exec/format`,
-// root-only on hokkaido so it could not be checked from the ebpflab account).
+// tracepoint ctx pointer), so the path lives at ctx + (loc & 0xffff). Confirmed live on 6.18.59:
+// a load captured file.path=/run/current-system/sw/bin/timeout for the right exec.
 const OFF_FILENAME_LOC: usize = 8;
 
 #[map]
