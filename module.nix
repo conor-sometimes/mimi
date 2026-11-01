@@ -50,18 +50,27 @@ in
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
         Type = "exec";
-        ExecStart = lib.getExe cfg.package;
-        # mimi prints one OCSF event per line to stdout; append it to the durable sink.
-        StandardOutput = "append:${cfg.sink}";
+        # mimi writes the OCSF event stream to the sink file itself (--sink), as the service user in
+        # its own writable LogsDirectory. It does NOT use systemd's StandardOutput=append:, which
+        # fails to set up under DynamicUser (the manager opens the fd before the LogsDirectory path
+        # exists -- exit 209/STDOUT). mimi's status and diagnostics go to the journal instead.
+        ExecStart = "${lib.getExe cfg.package} --sink ${cfg.sink}";
+        StandardOutput = "journal";
         LogsDirectory = lib.mkIf (lib.hasPrefix "/var/log/mimi" cfg.sink) "mimi";
+        # The default sink lives in LogsDirectory (writable, owned by the DynamicUser). A sink set
+        # elsewhere needs its directory made writable and pre-created by the operator.
+        ReadWritePaths = lib.optional (!lib.hasPrefix "/var/log/mimi" cfg.sink) (builtins.dirOf cfg.sink);
         Restart = "on-failure";
         RestartSec = 2;
 
-        # Loading a tracepoint program and reading a ring buffer needs only these two caps, so run
-        # as an unprivileged dynamic user with them ambient rather than as root.
+        # Loading a tracepoint program and reading a ring buffer needs CAP_BPF + CAP_PERFMON.
+        # Attaching the tracepoint also means reading its numeric id from tracefs
+        # (/sys/kernel/tracing, root-owned 0700), which a non-root DynamicUser can only read with
+        # CAP_DAC_READ_SEARCH (the same read-only bypass banken uses for root-owned logs). Run as an
+        # unprivileged dynamic user with just those three ambient, rather than as root.
         DynamicUser = true;
-        AmbientCapabilities = [ "CAP_BPF" "CAP_PERFMON" ];
-        CapabilityBoundingSet = [ "CAP_BPF" "CAP_PERFMON" ];
+        AmbientCapabilities = [ "CAP_BPF" "CAP_PERFMON" "CAP_DAC_READ_SEARCH" ];
+        CapabilityBoundingSet = [ "CAP_BPF" "CAP_PERFMON" "CAP_DAC_READ_SEARCH" ];
         LimitMEMLOCK = "infinity";
 
         NoNewPrivileges = true;

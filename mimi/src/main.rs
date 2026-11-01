@@ -26,18 +26,33 @@ fn monotonic_ns() -> i128 {
     ts.tv_sec as i128 * 1_000_000_000 + ts.tv_nsec as i128
 }
 
-// Whether a stdout write/flush means the consumer is gone and the sensor should stop. BrokenPipe is
-// the normal "the reader closed" signal: exit 0, no crash-loop under Restart=on-failure. Any other
-// write error means the sink is unusable (a full disk, say), so log it and stop too rather than spin.
+// Whether an event-sink write/flush means the consumer is gone and the sensor should stop. BrokenPipe
+// is the normal "the reader closed" signal for a pipe sink: exit 0, no crash-loop under
+// Restart=on-failure. Any other write error means the sink is unusable (a full disk, say), so log it
+// and stop too rather than spin.
 fn is_gone(r: io::Result<()>) -> bool {
     match r {
         Ok(()) => false,
         Err(ref e) if e.kind() == io::ErrorKind::BrokenPipe => true,
         Err(e) => {
-            eprintln!("mimi: stdout write failed ({e}); stopping");
+            eprintln!("mimi: event sink write failed ({e}); stopping");
             true
         }
     }
+}
+
+// --sink PATH, if given. Parses both `--sink PATH` and `--sink=PATH`.
+fn sink_arg() -> Option<String> {
+    let mut args = std::env::args();
+    while let Some(a) = args.next() {
+        if a == "--sink" {
+            return args.next();
+        }
+        if let Some(rest) = a.strip_prefix("--sink=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
 }
 
 // resolve_offsets returns the task_struct/mm_struct field byte offsets for the RUNNING kernel, in
@@ -136,12 +151,26 @@ fn main() -> anyhow::Result<()> {
     let mut last_drops = 0u64;
     eprintln!("mimi: watching execs. Ctrl-C to stop.");
 
-    // Hold the stdout lock for the whole run and write through it, so a consumer that goes away
-    // (the sink file closed, a tail pipe whose reader exits) surfaces as a BrokenPipe we exit on
-    // cleanly rather than the panic `println!` raises -- under the unit's Restart=on-failure a panic
-    // would crash-loop the sensor. Flush after each drain so a file sink banken tails sees every
-    // batch promptly (stdout is block-buffered to a file), not only when an 8K buffer fills.
-    let mut out = io::stdout().lock();
+    // The event sink: a durable file when `--sink PATH` is given (what the systemd unit uses), else
+    // stdout (for `mimi | banken`, a pipe, or dev use). mimi opening the file itself -- as the
+    // service user, in its writable LogsDirectory -- is deliberate: systemd's StandardOutput=append:
+    // to a DynamicUser LogsDirectory path fails to set up (exit 209/STDOUT, the sink dir not yet
+    // present when the manager opens the fd), so the sensor owns its own file instead. We write
+    // through `writeln!`/`flush` (both return a Result, so a vanished reader surfaces as the
+    // BrokenPipe we exit cleanly on, never the panic `println!` raises -- a panic would crash-loop
+    // under Restart=on-failure). Flush after each drain so banken tailing the file sees every batch
+    // promptly, not only when an 8K buffer fills.
+    let mut out: Box<dyn Write> = match sink_arg() {
+        Some(path) => {
+            let f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .map_err(|e| anyhow::anyhow!("mimi: cannot open --sink {path}: {e}"))?;
+            Box::new(io::BufWriter::new(f))
+        }
+        None => Box::new(io::stdout()),
+    };
 
     loop {
         while let Some(item) = ring.next() {

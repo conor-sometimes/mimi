@@ -177,7 +177,7 @@ mod tests {
     fn synth_btf() -> Vec<u8> {
         // strings: "\0" "int\0" "S\0" "a\0" "b\0"
         let mut strs = vec![0u8];
-        let mut soff = |s: &mut Vec<u8>, w: &str| -> u32 {
+        let soff = |s: &mut Vec<u8>, w: &str| -> u32 {
             let at = s.len() as u32;
             s.extend_from_slice(w.as_bytes());
             s.push(0);

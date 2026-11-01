@@ -132,6 +132,22 @@
         }
       );
 
+      # Runtime VM tests, x86_64-linux only (runNixOSTest needs a KVM builder of the test's system):
+      #   vm           -- the unit starts, stays up (no 209 crash-loop) and captures to its sink;
+      #   kernel-<ver> -- the same, booted on each of a spread of LTS kernels, proving CO-RE resolves
+      #                   offsets from each kernel's own BTF rather than assuming one layout.
+      checks = nixpkgs.lib.genAttrs [ "x86_64-linux" ] (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          args = {
+            inherit pkgs;
+            mimiModule = self.nixosModules.default;
+          };
+        in
+        { vm = import ./tests/vm.nix args; } // import ./tests/kernels.nix args
+      );
+
       devShells = forAllSystems (
         system:
         let
