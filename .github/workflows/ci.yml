@@ -11,8 +11,7 @@ permissions:
 # github-actions updater keeps them current, bumping the SHA and the trailing version comment.
 jobs:
   # The schema + userspace-logic gate: fmt, clippy, unit tests. Runs on the pinned nightly
-  # (rust-toolchain.toml). The full probe build + VM/distro-matrix tests need bpf-linker in the
-  # runner and land in a follow-up job (see the roadmap).
+  # (rust-toolchain.toml); the `probe` job below compiles the eBPF side, which needs the flake.
   check:
     runs-on: ubuntu-latest
     steps:
@@ -25,6 +24,22 @@ jobs:
         run: cargo clippy -p mimi-types --features user --all-targets -- -D warnings
       - name: test
         run: cargo test -p mimi-types --features user
+
+  # The probe actually compiles: build the eBPF object (build-std for the BPF target) and embed it,
+  # through the repo's reproducible flake (fenix nightly + rust-src + the pinned bpf-linker). rustup
+  # alone cannot do this, so the `check` job cannot; this one can. It is slower because it builds
+  # bpf-linker from source, but it is what keeps the sensor itself -- not only the schema -- building.
+  # The build command is the one verified locally: nix develop .#default -c cargo build.
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: build the probe and loader
+        run: nix develop .#default -c cargo build
 
   # Supply chain: advisories, licenses, sources (deny.toml).
   deny:
