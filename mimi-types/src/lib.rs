@@ -13,6 +13,12 @@ pub const MAX_DEPTH: usize = 8;
 pub const CMDLINE_LEN: usize = 128;
 /// Length of a task's `comm` (the kernel's fixed TASK_COMM_LEN).
 pub const COMM_LEN: usize = 16;
+/// Bytes of the executed program's path (sched_process_exec's `filename`), NUL-terminated.
+pub const FILENAME_LEN: usize = 256;
+
+/// The wire schema version, emitted in every event. The consumer (banken) checks it and refuses or
+/// downgrades on skew, so the two repos can evolve without silently misreading each other's bytes.
+pub const SCHEMA: &str = "mimi/1";
 
 /// One process in the ancestry chain.
 #[repr(C)]
@@ -41,6 +47,16 @@ pub struct Lineage {
     pub count: u32,
     /// Valid bytes in `cmdline`.
     pub cmdline_len: u32,
+    /// The argv's true total length; `> cmdline_len` means the capture was truncated (so banken can
+    /// both match on what it has and alert that the command line was cut).
+    pub argv_total_len: u32,
+    /// The execed process's real uid and gid (`bpf_get_current_uid_gid`); the account the agent
+    /// rules key on.
+    pub uid: u32,
+    pub gid: u32,
+    /// The executed program's path (`sched_process_exec` `filename`), NUL-terminated. This is the
+    /// Image banken matches `endswith` on; `comm` alone is a 15-byte basename that truncates.
+    pub filename: [u8; FILENAME_LEN],
     /// The execed process's argv, NUL-separated.
     pub cmdline: [u8; CMDLINE_LEN],
     /// chain[0] is the execed process; chain[1] its parent; ... up to the root or MAX_DEPTH.
@@ -53,6 +69,10 @@ impl Lineage {
             time_ns: 0,
             count: 0,
             cmdline_len: 0,
+            argv_total_len: 0,
+            uid: 0,
+            gid: 0,
+            filename: [0u8; FILENAME_LEN],
             cmdline: [0u8; CMDLINE_LEN],
             chain: [Ancestor::zeroed(); MAX_DEPTH],
         }
@@ -65,4 +85,4 @@ extern crate std;
 #[cfg(feature = "user")]
 mod user;
 #[cfg(feature = "user")]
-pub use user::{cmdline_str, comm_str, parse, render_json, render_text};
+pub use user::{cmdline_str, comm_str, filename_str, parse, render_json, render_mimi, render_text};

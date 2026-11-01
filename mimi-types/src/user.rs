@@ -118,6 +118,56 @@ pub fn render_json(lin: &Lineage) -> String {
     s
 }
 
+/// The executed program's path, trimmed at the first NUL.
+pub fn filename_str(filename: &[u8]) -> String {
+    let len = filename.iter().position(|&c| c == 0).unwrap_or(filename.len());
+    String::from_utf8_lossy(&filename[..len]).into_owned()
+}
+
+/// Render one exec event as mimi's own versioned wire JSON -- the schema banken ingests through its
+/// `mimi` parser (see `crate::SCHEMA`). This JSON is the contract; the shared fixture is a copy of
+/// this output, tested on both sides so the repos cannot drift. `time` is the wall-clock RFC3339
+/// stamp the loader derives from the monotonic `time_ns` (kept as `capture_ns` for latency).
+pub fn render_mimi(lin: &Lineage, time: &str) -> String {
+    let n = (lin.count as usize).min(lin.chain.len());
+    let mut s = format!(
+        r#"{{"schema":"{}","kind":"exec","time":"{}","capture_ns":{},"process":{{"#,
+        crate::SCHEMA,
+        json_escape(time),
+        lin.time_ns,
+    );
+    if n > 0 {
+        let p = &lin.chain[0];
+        s.push_str(&format!(
+            r#""name":"{}","pid":{},"uid":{},"gid":{},"image":"{}","cmdline":"{}","cmdline_truncated":{}"#,
+            json_escape(&comm_str(&p.comm)),
+            p.pid,
+            lin.uid,
+            lin.gid,
+            json_escape(&filename_str(&lin.filename)),
+            json_escape(&cmdline_str(lin)),
+            lin.argv_total_len > lin.cmdline_len,
+        ));
+    }
+    s.push('}'); // close "process"
+    if n > 1 {
+        let par = &lin.chain[1];
+        s.push_str(&format!(
+            r#","parent":{{"name":"{}","pid":{}}}"#,
+            json_escape(&comm_str(&par.comm)),
+            par.pid,
+        ));
+    }
+    s.push_str(r#","ancestry":["#);
+    let anc: Vec<String> = lin.chain[..n]
+        .iter()
+        .map(|a| format!(r#"{{"name":"{}","pid":{}}}"#, json_escape(&comm_str(&a.comm)), a.pid))
+        .collect();
+    s.push_str(&anc.join(","));
+    s.push_str("]}");
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +189,11 @@ mod tests {
         let cmd = b"ping\x008.8.8.8\x00";
         l.cmdline[..cmd.len()].copy_from_slice(cmd);
         l.cmdline_len = cmd.len() as u32;
+        l.argv_total_len = l.cmdline_len; // not truncated
+        l.uid = 1000;
+        l.gid = 1000;
+        let fname = b"/usr/bin/ping";
+        l.filename[..fname.len()].copy_from_slice(fname);
         l
     }
 
@@ -249,6 +304,12 @@ mod tests {
         l.time_ns = r.next_u64();
         l.count = r.u32();
         l.cmdline_len = r.u32();
+        l.argv_total_len = r.u32();
+        l.uid = r.u32();
+        l.gid = r.u32();
+        for b in l.filename.iter_mut() {
+            *b = r.byte();
+        }
         for b in l.cmdline.iter_mut() {
             *b = r.byte();
         }
@@ -313,6 +374,8 @@ mod tests {
             let _ = render_text(&l); // must not panic on any field values
             let j = render_json(&l);
             assert!(json_well_formed(&j), "render_json emitted malformed JSON: {j}");
+            let m = render_mimi(&l, "2026-11-02T00:00:00Z");
+            assert!(json_well_formed(&m), "render_mimi emitted malformed JSON: {m}");
         }
     }
 
@@ -325,6 +388,10 @@ mod tests {
             assert_eq!(got.time_ns, l.time_ns);
             assert_eq!(got.count, l.count);
             assert_eq!(got.cmdline_len, l.cmdline_len);
+            assert_eq!(got.argv_total_len, l.argv_total_len);
+            assert_eq!(got.uid, l.uid);
+            assert_eq!(got.gid, l.gid);
+            assert_eq!(got.filename, l.filename);
             assert_eq!(got.cmdline, l.cmdline);
             for (g, e) in got.chain.iter().zip(l.chain.iter()) {
                 assert_eq!(g.pid, e.pid);
@@ -379,13 +446,17 @@ mod tests {
     #[test]
     fn golden_wire_layout() {
         use core::mem::{align_of, offset_of, size_of};
-        assert_eq!(size_of::<Lineage>(), 304, "Lineage wire size changed");
+        assert_eq!(size_of::<Lineage>(), 576, "Lineage wire size changed");
         assert_eq!(align_of::<Lineage>(), 8);
         assert_eq!(offset_of!(Lineage, time_ns), 0);
         assert_eq!(offset_of!(Lineage, count), 8);
         assert_eq!(offset_of!(Lineage, cmdline_len), 12);
-        assert_eq!(offset_of!(Lineage, cmdline), 16);
-        assert_eq!(offset_of!(Lineage, chain), 144);
+        assert_eq!(offset_of!(Lineage, argv_total_len), 16);
+        assert_eq!(offset_of!(Lineage, uid), 20);
+        assert_eq!(offset_of!(Lineage, gid), 24);
+        assert_eq!(offset_of!(Lineage, filename), 28);
+        assert_eq!(offset_of!(Lineage, cmdline), 284);
+        assert_eq!(offset_of!(Lineage, chain), 412);
         assert_eq!(size_of::<Ancestor>(), 20, "Ancestor wire size changed");
         assert_eq!(align_of::<Ancestor>(), 4);
         assert_eq!(offset_of!(Ancestor, pid), 0);
@@ -411,6 +482,22 @@ mod tests {
                 r#""parent_process":{"name":"fish","pid":210139}},"#,
                 r#""ancestry":[{"name":"ping","pid":213541},{"name":"fish","pid":210139},"#,
                 r#"{"name":"systemd","pid":1}]}"#
+            )
+        );
+    }
+
+    #[test]
+    fn golden_render_mimi() {
+        // The wire contract: a copy of this exact string is the shared fixture banken's mimi parser
+        // is tested against, so a change here is a contract change that must move both sides.
+        assert_eq!(
+            render_mimi(&sample(), "2026-11-02T00:00:00Z"),
+            concat!(
+                r#"{"schema":"mimi/1","kind":"exec","time":"2026-11-02T00:00:00Z","capture_ns":0,"#,
+                r#""process":{"name":"ping","pid":213541,"uid":1000,"gid":1000,"image":"/usr/bin/ping","#,
+                r#""cmdline":"ping 8.8.8.8","cmdline_truncated":false},"#,
+                r#""parent":{"name":"fish","pid":210139},"#,
+                r#""ancestry":[{"name":"ping","pid":213541},{"name":"fish","pid":210139},{"name":"systemd","pid":1}]}"#
             )
         );
     }
