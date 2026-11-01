@@ -32,7 +32,11 @@ pub const OFF_MM: u32 = 1792;
 pub const OFF_ARG_START: u32 = 488;
 pub const OFF_ARG_END: u32 = 496;
 
-/// (struct name, field name, expected byte offset) for the loader's BTF validation.
+/// (struct name, field name, build-kernel fallback offset) in OFFSETS-map index order: the loader
+/// resolves each from the running kernel's BTF and writes it to the probe's OFFSETS map at this
+/// index, falling back to the listed offset only when BTF is unavailable. The probe reads its
+/// offsets from that map, so it carries no hardcoded offset of its own (that is the CO-RE property:
+/// one binary adapts to each kernel's layout).
 pub const OFFSET_TABLE: [(&str, &str, u32); 6] = [
     ("task_struct", "tgid", OFF_TGID),
     ("task_struct", "real_parent", OFF_REAL_PARENT),
@@ -41,6 +45,17 @@ pub const OFFSET_TABLE: [(&str, &str, u32); 6] = [
     ("mm_struct", "arg_start", OFF_ARG_START),
     ("mm_struct", "arg_end", OFF_ARG_END),
 ];
+
+/// Indices into the OFFSETS map (match OFFSET_TABLE order), shared by the loader (which writes them)
+/// and the probe (which reads them).
+pub const OFF_IDX_TGID: u32 = 0;
+pub const OFF_IDX_REAL_PARENT: u32 = 1;
+pub const OFF_IDX_COMM: u32 = 2;
+pub const OFF_IDX_MM: u32 = 3;
+pub const OFF_IDX_ARG_START: u32 = 4;
+pub const OFF_IDX_ARG_END: u32 = 5;
+/// Number of entries in the OFFSETS map.
+pub const OFFSET_COUNT: u32 = 6;
 
 /// One process in the ancestry chain.
 #[repr(C)]

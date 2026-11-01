@@ -92,15 +92,15 @@ just run        # build + run (needs root to load the probe)
 
 ## Portability
 
-The probe reads `task_struct`/`mm_struct` by byte offset, and those offsets are one kernel's layout.
-So before attaching, the loader resolves the same fields in the running kernel's own BTF
-(`/sys/kernel/btf/vmlinux`, a small dependency-free reader in `mimi/src/btf.rs`) and **refuses to
-attach if any differ** from the compiled offsets: mimi runs correctly or refuses loudly, it never
-reads the wrong field silently on a foreign kernel. Full **CO-RE** - the probe reading those
-BTF-resolved offsets so one binary runs on any BTF-capable kernel with no rebuild - is the next step
-(aya cannot yet emit BTF relocations from Rust, [aya-rs/aya#349](https://github.com/aya-rs/aya/issues/349)).
-The planned **live distro matrix** (boot each distro's own kernel, load mimi, assert it captures an
-exec) is what proves portability end to end.
+mimi does **CO-RE**: the probe holds no `task_struct`/`mm_struct` offsets of its own. Before it runs,
+the loader resolves those fields in the running kernel's own BTF (`/sys/kernel/btf/vmlinux`, a small
+dependency-free reader in `mimi/src/btf.rs`) and writes the offsets into the probe's `OFFSETS` map,
+so one binary adapts to each kernel's layout rather than assuming the build kernel's. It falls back
+to the build-kernel offsets only on a kernel without BTF, and warns. The resolution is done in
+userspace because aya cannot yet emit BTF relocations from Rust ([aya-rs/aya#349](https://github.com/aya-rs/aya/issues/349)).
+The parser is checked against ground truth (pahole) in an opt-in test; the planned **live distro
+matrix** (boot each distro's own kernel, load mimi, assert it captures an exec) is what proves the
+adaptation end to end on a privileged run.
 
 ## License
 

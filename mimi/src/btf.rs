@@ -1,14 +1,14 @@
 //! A tiny read-only BTF parser, just enough to look up a struct member's byte offset in the running
-//! kernel's own type information (/sys/kernel/btf/vmlinux). It exists so the loader can VALIDATE the
-//! probe's compiled-in task_struct/mm_struct offsets against the kernel it is about to run on, and
-//! refuse rather than silently read the wrong fields when they do not match (the failure mode of any
-//! hardcoded-offset probe on a kernel other than its build kernel).
+//! kernel's own type information (/sys/kernel/btf/vmlinux). It is how mimi does CO-RE: the loader
+//! resolves the task_struct/mm_struct field offsets for the kernel it is about to run on and writes
+//! them into the probe's OFFSETS map, so the probe carries no offset of its own and one binary adapts
+//! to each kernel's layout instead of assuming the build kernel's.
 //!
 //! This is deliberately not a general BTF library and adds no dependency: it walks the type section
 //! once, skipping each type's kind-specific payload, and reads the members of the two structs it is
-//! asked about. Full CO-RE -- the probe reading these resolved offsets so one binary runs on any BTF
-//! kernel -- builds on this; aya cannot yet emit BTF relocations from Rust (aya-rs/aya#349), and its
-//! BTF member offsets are not exposed through its public API, hence this small local reader.
+//! asked about. aya cannot yet emit BTF relocations from Rust (aya-rs/aya#349) and does not expose
+//! BTF member offsets through its public API, hence this small local reader does the resolution in
+//! userspace at load.
 
 use std::collections::HashMap;
 
