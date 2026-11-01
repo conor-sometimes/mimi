@@ -48,6 +48,11 @@ fn main() -> anyhow::Result<()> {
     let offset_ns = wall_now - monotonic_ns();
 
     let mut ring = RingBuf::try_from(ebpf.take_map("EVENTS").unwrap())?;
+    // The probe counts events it had to drop because the ring was full (per CPU); surface that so
+    // loss under a burst is visible and counted, not silent (the classic EDR blinding failure).
+    let drops: aya::maps::PerCpuArray<_, u64> =
+        aya::maps::PerCpuArray::try_from(ebpf.take_map("DROPS").unwrap())?;
+    let mut last_drops = 0u64;
     eprintln!("mimi: watching execs. Ctrl-C to stop.");
 
     loop {
@@ -62,6 +67,16 @@ fn main() -> anyhow::Result<()> {
                 if !out.is_empty() {
                     println!("{out}");
                 }
+            }
+        }
+        if let Ok(per_cpu) = drops.get(&0, 0) {
+            let total: u64 = per_cpu.iter().sum();
+            if total > last_drops {
+                eprintln!(
+                    "mimi: dropped {} event(s) to a full ring buffer (raise the ring if sustained)",
+                    total - last_drops
+                );
+                last_drops = total;
             }
         }
         std::thread::sleep(Duration::from_millis(50));
