@@ -69,10 +69,14 @@
             cargoHash = "sha256-MSjwNgFa847R8joc8oreVpWDujsKR9duooycmlaiB0U=";
             buildNoDefaultFeatures = true;
             buildFeatures = [ "llvm-23" ];
-            nativeBuildInputs = [ pkgs.llvmPackages_23.llvm ];
+            # llvm-config (for llvm-sys's build-time probe) comes from the dev output; libLLVM.so
+            # (for the final `-lLLVM` link) from the lib output. Omitting the lib output puts only
+            # -L <dev>/lib on the link line, where libLLVM.so is not, and the link fails.
+            nativeBuildInputs = [ pkgs.llvmPackages_23.llvm.dev ];
             buildInputs = [
               pkgs.zlib
               pkgs.libxml2
+              pkgs.llvmPackages_23.llvm.lib
             ];
             # llvm-sys shells out to llvm-config, unavailable when cross-compiling.
             doCheck = false;
