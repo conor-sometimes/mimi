@@ -92,10 +92,15 @@ just run        # build + run (needs root to load the probe)
 
 ## Portability
 
-The PoC reads `task_struct` by hardcoded offsets, so it runs on exactly its build kernel. The
-first-class sensor uses **CO-RE** (relocate the offsets against each kernel's BTF at load) so one
-binary runs on any BTF-capable kernel - which is what the planned **live distro matrix** (boot each
-distro's own kernel, load mimi, assert it captures an exec) both requires and proves.
+The probe reads `task_struct`/`mm_struct` by byte offset, and those offsets are one kernel's layout.
+So before attaching, the loader resolves the same fields in the running kernel's own BTF
+(`/sys/kernel/btf/vmlinux`, a small dependency-free reader in `mimi/src/btf.rs`) and **refuses to
+attach if any differ** from the compiled offsets: mimi runs correctly or refuses loudly, it never
+reads the wrong field silently on a foreign kernel. Full **CO-RE** - the probe reading those
+BTF-resolved offsets so one binary runs on any BTF-capable kernel with no rebuild - is the next step
+(aya cannot yet emit BTF relocations from Rust, [aya-rs/aya#349](https://github.com/aya-rs/aya/issues/349)).
+The planned **live distro matrix** (boot each distro's own kernel, load mimi, assert it captures an
+exec) is what proves portability end to end.
 
 ## License
 
