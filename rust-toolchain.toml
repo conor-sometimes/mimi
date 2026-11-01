@@ -1,0 +1,6 @@
+# aya's eBPF side needs a nightly with rust-src (to build-std `core` for the bpf target), and that
+# nightly's LLVM must match the bpf-linker mimi is built against (LLVM 23 -- see README "Toolchain").
+# Pinned so the three-way coherence holds: rustc's LLVM / bpf-linker's LLVM / aya-build's min rustc.
+[toolchain]
+channel = "nightly-2026-10-31"
+components = ["rust-src", "rustfmt", "clippy"]

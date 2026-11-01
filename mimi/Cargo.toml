@@ -1,0 +1,28 @@
+[package]
+name = "mimi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "eBPF telemetry sensor for banken: watches the kernel, emits process events."
+# A binary, never a crates.io library: the path dep on mimi-types is correct precisely because this
+# is not published (crates.io forbids path deps, so cargo-deny only tolerates them when publish=false).
+publish = false
+
+[dependencies]
+mimi-types = { path = "../mimi-types", features = ["user"] }
+aya = { workspace = true }
+anyhow = { workspace = true, default-features = true }
+libc = { workspace = true }
+
+[build-dependencies]
+anyhow = { workspace = true }
+aya-build = { workspace = true }
+cargo_metadata = { workspace = true }
+# Built for the BPF target by the build script (cargo-in-cargo with -Z build-std); declared here so
+# cargo tracks it for cache invalidation. See the aya template for why it is not an artifact dep.
+mimi-ebpf = { path = "../mimi-ebpf" }
+
+[[bin]]
+name = "mimi"
+path = "src/main.rs"

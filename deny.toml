@@ -1,0 +1,40 @@
+# cargo-deny: the supply-chain gate. Every dependency is audit surface, so this makes the tree a
+# checked artifact -- known-vulnerable crates, non-allowed licenses, and untrusted sources all fail
+# the build (`just deny`, and in CI).
+
+[advisories]
+version = 2
+# Fail on any crate with a known security advisory.
+yanked = "deny"
+
+[licenses]
+version = 2
+# mimi's own code is MIT (see LICENSE and Cargo.toml); the rest is the set of permissive licenses
+# we accept across the dependency tree. Anything outside this list is a review gate, not a silent
+# pull. The list is the licenses we're willing to carry, so a Dependabot bump that pulls a new
+# permissive license here doesn't break CI spuriously -- hence unused-allowed-license = "allow":
+# an entry no current crate uses is forward-compat, not an error.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+unused-allowed-license = "allow"
+confidence-threshold = 0.9
+
+[bans]
+# A duplicate version of a crate is worth a look (more audit surface, bloat), not a hard stop.
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's own crates are path deps with no version -- that is intentional, not a loose pin.
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only. A git or unknown source is a deliberate, reviewed exception, never accidental.
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Actions are pinned to commit SHAs (a tag is mutable; a SHA is the artifact). Dependabot's
+# github-actions updater keeps them current, bumping the SHA and the trailing version comment.
+jobs:
+  # The schema + userspace-logic gate: fmt, clippy, unit tests. Runs on the pinned nightly
+  # (rust-toolchain.toml). The full probe build + VM/distro-matrix tests need bpf-linker in the
+  # runner and land in a follow-up job (see the roadmap).
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install the pinned toolchain
+        run: rustup show
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy -p mimi-types --features user --all-targets -- -D warnings
+      - name: test
+        run: cargo test -p mimi-types --features user
+
+  # Supply chain: advisories, licenses, sources (deny.toml).
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2

@@ -1,0 +1,13 @@
+[package]
+name = "mimi-types"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared wire schema for the mimi eBPF sensor (no_std, repr(C))."
+
+[features]
+default = []
+# `user` is a seam for std-side conveniences the userspace loader may want; the probe uses the crate
+# no_std. Kept even if empty so the dependency edge is explicit.
+user = []

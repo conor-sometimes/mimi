@@ -1,0 +1,17 @@
+[package]
+name = "mimi-ebpf"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# The BPF probe, built for the bpf target and embedded in the mimi binary -- never published, so its
+# path dep on mimi-types is fine (see the note in mimi/Cargo.toml).
+publish = false
+
+[dependencies]
+mimi-types = { path = "../mimi-types" }
+aya-ebpf = { workspace = true }
+
+[[bin]]
+name = "mimi"
+path = "src/main.rs"

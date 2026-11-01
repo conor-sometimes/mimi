@@ -1,0 +1,37 @@
+# Reference systemd unit for mimi. Unlike banken (a timer-driven oneshot that polls logs), mimi is a
+# long-running SERVICE: it loads an eBPF probe once and streams events continuously, so end-to-end
+# detection latency is capture + match, not bounded by any scan interval. The NixOS module
+# (services.mimi) generates the hardened equivalent; this is the hand-rolled reference.
+[Unit]
+Description=mimi: eBPF telemetry sensor for banken
+Documentation=https://github.com/conor-sometimes/mimi
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/mimi
+
+# mimi loads and attaches a BPF program and reads kernel/user memory from the probe; that needs
+# CAP_BPF + CAP_PERFMON (kernel 5.8+). Everything else is taken away -- it has no business touching
+# the filesystem, the network (beyond handing events to banken), or anything else.
+AmbientCapabilities=CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictAddressFamilies=AF_UNIX
+MemoryDenyWriteExecute=true
+LockPersonality=true
+RestrictRealtime=true
+# An attacker who OOMs the box must not reap the sensor.
+OOMScoreAdjust=-900
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

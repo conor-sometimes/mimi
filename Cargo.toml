@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["mimi", "mimi-types", "mimi-ebpf"]
+# mimi-ebpf is built for the BPF target by mimi's build.rs (aya-build), not as a host member.
+default-members = ["mimi", "mimi-types"]
+
+[workspace.package]
+license = "MIT"
+edition = "2024"
+repository = "https://github.com/conor-sometimes/mimi"
+
+# Dependency policy (README "Dependencies"): every dep is audit surface, justified by hardening or
+# function against the cost of auditing its whole tree. aya is the loader; anyhow is error context
+# in a root daemon; libc is the memlock bump. No tokio/clap/log freeloaders. cargo-deny gates it.
+# Exact pins (`=x.y.z`), and Cargo.lock is committed, so the whole tree is deterministic; Dependabot
+# (.github/dependabot.yml) proposes bumps as PRs, gated by CI + cargo-deny + review -- determinism
+# with a maintained upgrade path, the Cargo equivalent of banken's SHA-pinned actions.
+[workspace.dependencies]
+aya = { version = "=0.14.0", default-features = false }
+aya-build = { version = "=0.2.0", default-features = false }
+aya-ebpf = { version = "=0.2.1", default-features = false }
+anyhow = { version = "=1.0.104", default-features = false }
+cargo_metadata = { version = "=0.23.0", default-features = false }
+libc = { version = "=0.2.159", default-features = false }
+
+[profile.release.package.mimi-ebpf]
+debug = 2
+codegen-units = 1
+strip = false
