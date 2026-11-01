@@ -22,6 +22,12 @@ test:
 deny:
     cargo deny check
 
+# The sensor<->brain contract: render_mimi must still equal the shared fixture that banken parses
+# from its side (`just contract` there). The two repos' testdata/mimi_event.golden.jsonl must stay
+# byte-identical, so a schema change has to move both halves of the family.
+contract:
+    cargo test -p mimi-types --features user golden_render_mimi
+
 # Full build: compiles the BPF probe and embeds it in the mimi binary. Needs bpf-linker on PATH
 # matching the nightly's LLVM -- see README "Toolchain".
 build:

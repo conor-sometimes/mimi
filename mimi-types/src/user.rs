@@ -488,17 +488,10 @@ mod tests {
 
     #[test]
     fn golden_render_mimi() {
-        // The wire contract: a copy of this exact string is the shared fixture banken's mimi parser
-        // is tested against, so a change here is a contract change that must move both sides.
-        assert_eq!(
-            render_mimi(&sample(), "2026-11-02T00:00:00Z"),
-            concat!(
-                r#"{"schema":"mimi/1","kind":"exec","time":"2026-11-02T00:00:00Z","capture_ns":0,"#,
-                r#""process":{"name":"ping","pid":213541,"uid":1000,"gid":1000,"image":"/usr/bin/ping","#,
-                r#""cmdline":"ping 8.8.8.8","cmdline_truncated":false},"#,
-                r#""parent":{"name":"fish","pid":210139},"#,
-                r#""ancestry":[{"name":"ping","pid":213541},{"name":"fish","pid":210139},{"name":"systemd","pid":1}]}"#
-            )
-        );
+        // The shared contract fixture: banken's mimi parser is tested against a byte-for-byte copy
+        // of this same file, so a change here is a contract change that must move both sides.
+        // `just contract` checks the two repos' copies still match.
+        let fixture = include_str!("../../testdata/mimi_event.golden.jsonl");
+        assert_eq!(render_mimi(&sample(), "2026-11-02T00:00:00Z"), fixture.trim_end());
     }
 }

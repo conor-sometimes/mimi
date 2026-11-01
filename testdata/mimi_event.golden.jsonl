@@ -1,0 +1,1 @@
+{"schema":"mimi/1","kind":"exec","time":"2026-11-02T00:00:00Z","capture_ns":0,"process":{"name":"ping","pid":213541,"uid":1000,"gid":1000,"image":"/usr/bin/ping","cmdline":"ping 8.8.8.8","cmdline_truncated":false},"parent":{"name":"fish","pid":210139},"ancestry":[{"name":"ping","pid":213541},{"name":"fish","pid":210139},{"name":"systemd","pid":1}]}
