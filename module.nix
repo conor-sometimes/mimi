@@ -22,12 +22,13 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      # No default yet: mimi's reproducible nix package (fenix nightly + build-std for the BPF
-      # target + a matching bpf-linker) is the open piece; until then, build it in the workbench
-      # dev env and pass it here. Tracked as the mimi packaging task.
+      # The flake's nixosModule defaults this to its own packages.<system>.mimi (the hermetic build:
+      # fenix nightly + vendored build-std for the BPF target + the matching bpf-linker), so the one
+      # switch deploys with nothing built by hand. Imported as a bare module instead of via the
+      # flake, set this to such a package yourself.
       description = ''
-        The mimi package (the probe is embedded in the binary). No default until the hermetic nix
-        build lands; for now pass a package built from the workbench dev env.
+        The mimi package (the probe is embedded in the binary). The flake's nixosModule defaults it
+        to the flake's own hermetically-built mimi; override to pin your own.
       '';
     };
 
