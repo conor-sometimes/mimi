@@ -3,12 +3,15 @@ name = "mimi-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
+license = "MIT"
 
 [package.metadata]
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+# Exact-pinned like the rest of the tree, and Cargo.lock is committed, so the one place that builds
+# with instrumentation is under the same supply-chain gate (`just deny` checks this manifest too).
+libfuzzer-sys = "=0.4.13"
 mimi-types = { path = "../mimi-types", features = ["user"] }
 
 # Its own workspace: cargo-fuzz builds with special flags, kept out of the main tree.

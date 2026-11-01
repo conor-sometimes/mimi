@@ -23,6 +23,7 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    "NCSA",  # libfuzzer-sys bundles LLVM's libFuzzer (University of Illinois/NCSA); OSI + FSF permissive, test-only
 ]
 unused-allowed-license = "allow"
 confidence-threshold = 0.9

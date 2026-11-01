@@ -18,9 +18,12 @@ clippy:
 test:
     cargo test -p mimi-types --features user
 
-# Supply-chain gate: advisories, licenses, sources (deny.toml).
+# Supply-chain gate: advisories, licenses, sources (deny.toml). The fuzz crate is its own workspace
+# (cargo-fuzz builds it with special flags), so gate it explicitly too -- the instrumented build
+# must not be the one place with a floating dependency.
 deny:
     cargo deny check
+    cargo deny --manifest-path fuzz/Cargo.toml check
 
 # The sensor<->brain contract: render_mimi must still equal the shared fixture that banken parses
 # from its side (`just contract` there). The two repos' testdata/mimi_event.golden.jsonl must stay
