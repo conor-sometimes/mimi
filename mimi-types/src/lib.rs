@@ -31,7 +31,10 @@ pub struct Ancestor {
 
 impl Ancestor {
     pub const fn zeroed() -> Self {
-        Self { pid: 0, comm: [0u8; COMM_LEN] }
+        Self {
+            pid: 0,
+            comm: [0u8; COMM_LEN],
+        }
     }
 }
 

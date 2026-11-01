@@ -11,7 +11,7 @@ use aya_ebpf::{
     maps::{PerCpuArray, RingBuf},
     programs::TracePointContext,
 };
-use mimi_types::{Ancestor, Lineage, CMDLINE_LEN, MAX_DEPTH};
+use mimi_types::{Ancestor, CMDLINE_LEN, Lineage, MAX_DEPTH};
 
 // task_struct / mm_struct field byte offsets for THIS kernel (6.18, from `pahole`). PoC stopgap: the
 // first-class sensor relocates these via CO-RE (aya-tool vmlinux bindings) so one binary runs on any
@@ -96,10 +96,15 @@ fn run(ctx: &TracePointContext) -> Result<(), i64> {
             let total = arg_end.saturating_sub(arg_start);
             // True length before clamping, so the consumer can see a truncated capture.
             lin.argv_total_len = total.min(u32::MAX as u64) as u32;
-            let n = if total > CMDLINE_LEN as u64 { CMDLINE_LEN as u32 } else { total as u32 };
+            let n = if total > CMDLINE_LEN as u64 {
+                CMDLINE_LEN as u32
+            } else {
+                total as u32
+            };
             if arg_start != 0
                 && n > 0
-                && unsafe { bpf_probe_read_user_buf(arg_start as *const u8, &mut lin.cmdline) }.is_ok()
+                && unsafe { bpf_probe_read_user_buf(arg_start as *const u8, &mut lin.cmdline) }
+                    .is_ok()
             {
                 lin.cmdline_len = n;
             }
@@ -113,21 +118,29 @@ fn run(ctx: &TracePointContext) -> Result<(), i64> {
         if task.is_null() {
             break;
         }
-        let Ok(pid) = (unsafe { read_at::<u32>(task, OFF_TGID) }) else { break };
-        let Ok(comm) = (unsafe { read_at::<[u8; 16]>(task, OFF_COMM) }) else { break };
+        let Ok(pid) = (unsafe { read_at::<u32>(task, OFF_TGID) }) else {
+            break;
+        };
+        let Ok(comm) = (unsafe { read_at::<[u8; 16]>(task, OFF_COMM) }) else {
+            break;
+        };
         lin.chain[i] = Ancestor { pid, comm };
         lin.count += 1;
         if pid <= 1 {
             break;
         }
-        let Ok(parent) = (unsafe { read_at::<*const u8>(task, OFF_REAL_PARENT) }) else { break };
+        let Ok(parent) = (unsafe { read_at::<*const u8>(task, OFF_REAL_PARENT) }) else {
+            break;
+        };
         task = parent;
     }
 
     match EVENTS.reserve::<Lineage>(0) {
         Some(mut entry) => {
             // map value -> ring buffer, one bounded copy, no stack intermediate.
-            unsafe { core::ptr::copy_nonoverlapping(lin_ptr as *const Lineage, entry.as_mut_ptr(), 1) };
+            unsafe {
+                core::ptr::copy_nonoverlapping(lin_ptr as *const Lineage, entry.as_mut_ptr(), 1)
+            };
             entry.submit(0);
         }
         None => {

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use aya_build::Toolchain;
 
 /// Compile the BPF program (`mimi-ebpf`) for the bpf target and make it available to the userspace

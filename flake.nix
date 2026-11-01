@@ -44,7 +44,7 @@
             (fenix.packages.${system}.toolchainOf {
               channel = "nightly";
               date = "2026-10-31";
-              sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+              sha256 = "sha256-07UyQu51OrDSHsy37ts4KC/NChHMfh5ZPY9QrihIXYo=";
             }).withComponents
               [
                 "cargo"
@@ -64,9 +64,9 @@
               owner = "aya-rs";
               repo = "bpf-linker";
               tag = "v${version}";
-              hash = "sha256-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=";
+              hash = "sha256-y4jlEs9oF5jLlLkJHqXUMsHOeLUhTCDeqwnYzp8H9yI=";
             };
-            cargoHash = "sha256-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=";
+            cargoHash = "sha256-MSjwNgFa847R8joc8oreVpWDujsKR9duooycmlaiB0U=";
             buildNoDefaultFeatures = true;
             buildFeatures = [ "llvm-23" ];
             nativeBuildInputs = [ pkgs.llvmPackages_23.llvm ];

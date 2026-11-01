@@ -46,7 +46,11 @@ pub fn render_text(lin: &Lineage) -> String {
     }
     let mut out = String::new();
     let p = &lin.chain[0];
-    out.push_str(&format!("process.name={} process.pid={}", comm_str(&p.comm), p.pid));
+    out.push_str(&format!(
+        "process.name={} process.pid={}",
+        comm_str(&p.comm),
+        p.pid
+    ));
     let cmd = cmdline_str(lin);
     if !cmd.is_empty() {
         out.push_str(&format!(" process.cmdline=\"{cmd}\""));
@@ -111,7 +115,13 @@ pub fn render_json(lin: &Lineage) -> String {
     s.push_str(r#"},"ancestry":["#);
     let anc: Vec<String> = lin.chain[..n]
         .iter()
-        .map(|a| format!(r#"{{"name":"{}","pid":{}}}"#, json_escape(&comm_str(&a.comm)), a.pid))
+        .map(|a| {
+            format!(
+                r#"{{"name":"{}","pid":{}}}"#,
+                json_escape(&comm_str(&a.comm)),
+                a.pid
+            )
+        })
         .collect();
     s.push_str(&anc.join(","));
     s.push_str("]}");
@@ -120,7 +130,10 @@ pub fn render_json(lin: &Lineage) -> String {
 
 /// The executed program's path, trimmed at the first NUL.
 pub fn filename_str(filename: &[u8]) -> String {
-    let len = filename.iter().position(|&c| c == 0).unwrap_or(filename.len());
+    let len = filename
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(filename.len());
     String::from_utf8_lossy(&filename[..len]).into_owned()
 }
 
@@ -171,7 +184,13 @@ pub fn render_mimi(lin: &Lineage, time: &str) -> String {
     s.push_str(r#","ancestry":["#);
     let anc: Vec<String> = lin.chain[..n]
         .iter()
-        .map(|a| format!(r#"{{"pid":{},"name":"{}"}}"#, a.pid, json_escape(&comm_str(&a.comm))))
+        .map(|a| {
+            format!(
+                r#"{{"pid":{},"name":"{}"}}"#,
+                a.pid,
+                json_escape(&comm_str(&a.comm))
+            )
+        })
         .collect();
     s.push_str(&anc.join(","));
     s.push_str("]}");
@@ -188,7 +207,11 @@ pub fn rfc3339_utc(epoch_ns: u128) -> String {
     let nanos = (epoch_ns % 1_000_000_000) as u32;
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
-    let (hh, mm, ss) = ((rem / 3600) as u32, ((rem % 3600) / 60) as u32, (rem % 60) as u32);
+    let (hh, mm, ss) = (
+        (rem / 3600) as u32,
+        ((rem % 3600) / 60) as u32,
+        (rem % 60) as u32,
+    );
     // civil_from_days: `days` is days since 1970-01-01.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -205,7 +228,7 @@ pub fn rfc3339_utc(epoch_ns: u128) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Ancestor, Lineage, COMM_LEN};
+    use crate::{Ancestor, COMM_LEN, Lineage};
 
     fn comm(name: &str) -> [u8; COMM_LEN] {
         let mut c = [0u8; COMM_LEN];
@@ -216,9 +239,18 @@ mod tests {
 
     fn sample() -> Lineage {
         let mut l = Lineage::zeroed();
-        l.chain[0] = Ancestor { pid: 213541, comm: comm("ping") };
-        l.chain[1] = Ancestor { pid: 210139, comm: comm("fish") };
-        l.chain[2] = Ancestor { pid: 1, comm: comm("systemd") };
+        l.chain[0] = Ancestor {
+            pid: 213541,
+            comm: comm("ping"),
+        };
+        l.chain[1] = Ancestor {
+            pid: 210139,
+            comm: comm("fish"),
+        };
+        l.chain[2] = Ancestor {
+            pid: 1,
+            comm: comm("systemd"),
+        };
         l.count = 3;
         let cmd = b"ping\x008.8.8.8\x00";
         l.cmdline[..cmd.len()].copy_from_slice(cmd);
@@ -255,10 +287,19 @@ mod tests {
     #[test]
     fn renders_process_parent_and_ancestry() {
         let out = render_text(&sample());
-        assert!(out.contains("process.name=ping process.pid=213541"), "{out}");
+        assert!(
+            out.contains("process.name=ping process.pid=213541"),
+            "{out}"
+        );
         assert!(out.contains(r#"process.cmdline="ping 8.8.8.8""#), "{out}");
-        assert!(out.contains("process.parent.name=fish process.parent.pid=210139"), "{out}");
-        assert!(out.contains("process.ancestry=fish(210139) < systemd(1)"), "{out}");
+        assert!(
+            out.contains("process.parent.name=fish process.parent.pid=210139"),
+            "{out}"
+        );
+        assert!(
+            out.contains("process.ancestry=fish(210139) < systemd(1)"),
+            "{out}"
+        );
         // the whole point: no ugly deep nesting
         assert!(!out.contains("parent.parent"), "{out}");
     }
@@ -283,9 +324,15 @@ mod tests {
     fn renders_json_process_object() {
         let j = render_json(&sample());
         assert!(j.starts_with('{') && j.ends_with('}'), "{j}");
-        assert!(j.contains(r#""process":{"name":"ping","pid":213541"#), "{j}");
+        assert!(
+            j.contains(r#""process":{"name":"ping","pid":213541"#),
+            "{j}"
+        );
         assert!(j.contains(r#""cmd_line":"ping 8.8.8.8""#), "{j}");
-        assert!(j.contains(r#""parent_process":{"name":"fish","pid":210139}"#), "{j}");
+        assert!(
+            j.contains(r#""parent_process":{"name":"fish","pid":210139}"#),
+            "{j}"
+        );
         assert!(j.contains(r#""ancestry":["#), "{j}");
     }
 
@@ -407,9 +454,15 @@ mod tests {
             let l = random_lineage(&mut r);
             let _ = render_text(&l); // must not panic on any field values
             let j = render_json(&l);
-            assert!(json_well_formed(&j), "render_json emitted malformed JSON: {j}");
+            assert!(
+                json_well_formed(&j),
+                "render_json emitted malformed JSON: {j}"
+            );
             let m = render_mimi(&l, "2026-11-02T00:00:00Z");
-            assert!(json_well_formed(&m), "render_mimi emitted malformed JSON: {m}");
+            assert!(
+                json_well_formed(&m),
+                "render_mimi emitted malformed JSON: {m}"
+            );
         }
     }
 
@@ -443,7 +496,10 @@ mod tests {
             // Bound on *chars*, not bytes: from_utf8_lossy maps each byte to at most one char, but
             // an invalid byte becomes a 3-byte replacement char, so the byte length can exceed the
             // buffer. What must hold is that no more input than the buffer was ever consumed.
-            assert!(s.chars().count() <= l.cmdline.len(), "cmdline_str consumed past the buffer");
+            assert!(
+                s.chars().count() <= l.cmdline.len(),
+                "cmdline_str consumed past the buffer"
+            );
             assert!(!s.contains('\0'), "cmdline_str leaked a NUL");
         }
     }
@@ -526,15 +582,24 @@ mod tests {
         // of this same file, so a change here is a contract change that must move both sides.
         // `just contract` checks the two repos' copies still match.
         let fixture = include_str!("../../testdata/mimi_event.golden.jsonl");
-        assert_eq!(render_mimi(&sample(), "2026-11-02T00:00:00Z"), fixture.trim_end());
+        assert_eq!(
+            render_mimi(&sample(), "2026-11-02T00:00:00Z"),
+            fixture.trim_end()
+        );
     }
 
     #[test]
     fn rfc3339_known_epochs() {
         assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00.000000000Z");
         assert_eq!(rfc3339_utc(1_000_000_000), "1970-01-01T00:00:01.000000000Z");
-        assert_eq!(rfc3339_utc(86_400_000_000_000), "1970-01-02T00:00:00.000000000Z");
+        assert_eq!(
+            rfc3339_utc(86_400_000_000_000),
+            "1970-01-02T00:00:00.000000000Z"
+        );
         // the Unix "billennium": 1_000_000_000 s since the epoch = 2001-09-09 01:46:40 UTC.
-        assert_eq!(rfc3339_utc(1_000_000_000_000_000_000), "2001-09-09T01:46:40.000000000Z");
+        assert_eq!(
+            rfc3339_utc(1_000_000_000_000_000_000),
+            "2001-09-09T01:46:40.000000000Z"
+        );
     }
 }
