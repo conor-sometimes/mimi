@@ -85,4 +85,6 @@ extern crate std;
 #[cfg(feature = "user")]
 mod user;
 #[cfg(feature = "user")]
-pub use user::{cmdline_str, comm_str, filename_str, parse, render_json, render_mimi, render_text};
+pub use user::{
+    cmdline_str, comm_str, filename_str, parse, render_json, render_mimi, render_text, rfc3339_utc,
+};

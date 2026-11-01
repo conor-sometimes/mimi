@@ -1,14 +1,25 @@
 use aya::{maps::RingBuf, programs::TracePoint};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-// mimi: load the probe, attach it to sched_process_exec, and print each exec event. The probe and
+// mimi: load the probe, attach it to sched_process_exec, and emit each exec event. The probe and
 // its BPF object are embedded in this binary by the build script. Parsing and rendering live in
-// mimi-types (the `user` feature) so they are shared with anything else that reads the wire format
-// and are unit-tested without the kernel.
+// mimi-types (the `user` feature), shared with anything else that reads the wire format and
+// unit-tested without the kernel.
 //
-// This is the PoC's one-binary-prints-events shape. The real sensor streams structured events to
-// banken continuously (so end-to-end latency is capture + match, not bounded by a scan interval) --
-// see the roadmap; for now it prints the human view to stdout.
+// Default output is one OCSF-shaped event per line (mimi-types `render_mimi`, the schema banken
+// ingests through its `mimi` parser); `--text` prints the human view instead. Streaming to banken
+// as a continuous feed (so end-to-end latency is capture + match, not bounded by a scan interval)
+// is the next step -- see the roadmap; for now events go to stdout, which a durable file sink or a
+// pipe to banken consumes.
+
+// Read CLOCK_MONOTONIC in nanoseconds (the clock the probe's bpf_ktime_get_ns stamps).
+fn monotonic_ns() -> i128 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: clock_gettime writes a valid timespec for a valid clock id.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    ts.tv_sec as i128 * 1_000_000_000 + ts.tv_nsec as i128
+}
+
 fn main() -> anyhow::Result<()> {
     // Bump the memlock rlimit for older kernels' map accounting.
     let rlim = libc::rlimit {
@@ -25,9 +36,16 @@ fn main() -> anyhow::Result<()> {
     program.load()?;
     program.attach("sched", "sched_process_exec")?;
 
-    // Default output is the JSON process object (the wire shape banken ingests / maps onto OCSF);
-    // `--text` prints the human view instead.
     let text = std::env::args().any(|a| a == "--text");
+
+    // The probe stamps CLOCK_MONOTONIC (bpf_ktime_get_ns), so sample the offset to wall-clock once
+    // and turn each event's monotonic time_ns into a real UTC timestamp; capture_ns keeps the raw
+    // monotonic value for latency measurement on the banken side.
+    let wall_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i128)
+        .unwrap_or(0);
+    let offset_ns = wall_now - monotonic_ns();
 
     let mut ring = RingBuf::try_from(ebpf.take_map("EVENTS").unwrap())?;
     eprintln!("mimi: watching execs. Ctrl-C to stop.");
@@ -38,7 +56,8 @@ fn main() -> anyhow::Result<()> {
                 let out = if text {
                     mimi_types::render_text(&lin)
                 } else {
-                    mimi_types::render_json(&lin)
+                    let wall = (offset_ns + lin.time_ns as i128).max(0) as u128;
+                    mimi_types::render_mimi(&lin, &mimi_types::rfc3339_utc(wall))
                 };
                 if !out.is_empty() {
                     println!("{out}");

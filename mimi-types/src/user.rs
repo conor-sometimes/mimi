@@ -178,6 +178,30 @@ pub fn render_mimi(lin: &Lineage, time: &str) -> String {
     s
 }
 
+/// Format a wall-clock time (nanoseconds since the Unix epoch, UTC) as RFC3339Nano, with no
+/// dependency: the y/m/d comes from the standard civil-from-days algorithm (Hinnant). The loader
+/// derives this from the probe's monotonic `time_ns` plus a sampled realtime offset, and passes it
+/// to `render_mimi` as the event `time`; the raw monotonic value rides along as `capture_ns` for
+/// latency measurement.
+pub fn rfc3339_utc(epoch_ns: u128) -> String {
+    let secs = (epoch_ns / 1_000_000_000) as i64;
+    let nanos = (epoch_ns % 1_000_000_000) as u32;
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let (hh, mm, ss) = ((rem / 3600) as u32, ((rem % 3600) / 60) as u32, (rem % 60) as u32);
+    // civil_from_days: `days` is days since 1970-01-01.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let year = (yoe as i64 + era * 400) + if m <= 2 { 1 } else { 0 };
+    format!("{year:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{nanos:09}Z")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,5 +527,14 @@ mod tests {
         // `just contract` checks the two repos' copies still match.
         let fixture = include_str!("../../testdata/mimi_event.golden.jsonl");
         assert_eq!(render_mimi(&sample(), "2026-11-02T00:00:00Z"), fixture.trim_end());
+    }
+
+    #[test]
+    fn rfc3339_known_epochs() {
+        assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00.000000000Z");
+        assert_eq!(rfc3339_utc(1_000_000_000), "1970-01-01T00:00:01.000000000Z");
+        assert_eq!(rfc3339_utc(86_400_000_000_000), "1970-01-02T00:00:00.000000000Z");
+        // the Unix "billennium": 1_000_000_000 s since the epoch = 2001-09-09 01:46:40 UTC.
+        assert_eq!(rfc3339_utc(1_000_000_000_000_000_000), "2001-09-09T01:46:40.000000000Z");
     }
 }
