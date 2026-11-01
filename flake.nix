@@ -28,6 +28,11 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
     in
     {
+      # services.mimi: the sensor as a hardened systemd service. Usually turned on via banken's
+      # services.banken.mimi.enable (the one switch); import this alongside banken's module.
+      nixosModules.default = import ./module.nix;
+      nixosModules.mimi = import ./module.nix;
+
       devShells = forAllSystems (
         system:
         let
