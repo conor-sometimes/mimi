@@ -20,6 +20,28 @@ pub const FILENAME_LEN: usize = 256;
 /// downgrades on skew, so the two repos can evolve without silently misreading each other's bytes.
 pub const SCHEMA: &str = "mimi/2";
 
+// task_struct / mm_struct field byte offsets on the build kernel (6.x, confirmed with pahole). The
+// single source the probe reads AND the loader validates against the running kernel's own BTF (see
+// mimi's btf.rs): if they differ the kernel is incompatible and the loader refuses, rather than read
+// the wrong fields. Hardcoded until CO-RE lands -- this is what makes the hardcoding safe (checked
+// against each kernel), not a silent wrong-capture waiting for a different kernel.
+pub const OFF_TGID: u32 = 1924;
+pub const OFF_REAL_PARENT: u32 = 1936;
+pub const OFF_COMM: u32 = 2464;
+pub const OFF_MM: u32 = 1792;
+pub const OFF_ARG_START: u32 = 488;
+pub const OFF_ARG_END: u32 = 496;
+
+/// (struct name, field name, expected byte offset) for the loader's BTF validation.
+pub const OFFSET_TABLE: [(&str, &str, u32); 6] = [
+    ("task_struct", "tgid", OFF_TGID),
+    ("task_struct", "real_parent", OFF_REAL_PARENT),
+    ("task_struct", "comm", OFF_COMM),
+    ("task_struct", "mm", OFF_MM),
+    ("mm_struct", "arg_start", OFF_ARG_START),
+    ("mm_struct", "arg_end", OFF_ARG_END),
+];
+
 /// One process in the ancestry chain.
 #[repr(C)]
 #[derive(Clone, Copy)]

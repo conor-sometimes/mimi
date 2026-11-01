@@ -13,17 +13,18 @@ use aya_ebpf::{
 };
 use mimi_types::{Ancestor, CMDLINE_LEN, Lineage, MAX_DEPTH};
 
-// task_struct / mm_struct field byte offsets for THIS kernel (6.18, from `pahole`). PoC stopgap: the
-// first-class sensor relocates these via CO-RE (aya-tool vmlinux bindings) so one binary runs on any
-// BTF kernel. Hardcoded offsets cannot cross kernels -- which is exactly why the distro matrix forces
-// CO-RE (see the roadmap). The only `unsafe` below is the kernel/user reads and the scratch-map
-// access: fault-safe helpers, bounded loop, verified by the kernel's BPF verifier at load.
-const OFF_TGID: usize = 1924; // task_struct.tgid
-const OFF_REAL_PARENT: usize = 1936; // task_struct.real_parent
-const OFF_COMM: usize = 2464; // task_struct.comm[16]
-const OFF_MM: usize = 1792; // task_struct.mm
-const OFF_ARG_START: usize = 488; // mm_struct.arg_start (user address)
-const OFF_ARG_END: usize = 496; // mm_struct.arg_end
+// task_struct / mm_struct field byte offsets, from mimi_types (the single source; confirmed with
+// pahole on the build kernel). The loader validates these against the running kernel's own BTF and
+// refuses to attach on a mismatch (mimi/src/btf.rs), so a hardcoded offset can never silently read
+// the wrong field on a kernel other than its build kernel -- the failure CO-RE will finally remove.
+// The only `unsafe` below is the kernel/user reads and the scratch-map access: fault-safe helpers,
+// bounded loop, verified by the kernel's BPF verifier at load.
+const OFF_TGID: usize = mimi_types::OFF_TGID as usize;
+const OFF_REAL_PARENT: usize = mimi_types::OFF_REAL_PARENT as usize;
+const OFF_COMM: usize = mimi_types::OFF_COMM as usize;
+const OFF_MM: usize = mimi_types::OFF_MM as usize;
+const OFF_ARG_START: usize = mimi_types::OFF_ARG_START as usize;
+const OFF_ARG_END: usize = mimi_types::OFF_ARG_END as usize;
 
 // sched_process_exec tracepoint record layout (tracefs
 // events/sched/sched_process_exec/format; stable across 5.x/6.x):

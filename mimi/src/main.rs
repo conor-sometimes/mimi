@@ -2,6 +2,8 @@ use aya::{maps::RingBuf, programs::TracePoint};
 use std::io::{self, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod btf;
+
 // mimi: load the probe, attach it to sched_process_exec, and emit each exec event. The probe and
 // its BPF object are embedded in this binary by the build script. Parsing and rendering live in
 // mimi-types (the `user` feature), shared with anything else that reads the wire format and
@@ -38,6 +40,31 @@ fn is_gone(r: io::Result<()>) -> bool {
     }
 }
 
+// validate_offsets resolves the probe's task_struct/mm_struct fields in the running kernel's BTF
+// (/sys/kernel/btf/vmlinux) and returns the entries whose byte offset differs from the compiled one
+// (empty = every offset matches). An Err means BTF could not be read or parsed, so validation could
+// not run -- distinct from a clean "no mismatches".
+fn validate_offsets() -> Result<Vec<String>, String> {
+    let data =
+        std::fs::read("/sys/kernel/btf/vmlinux").map_err(|e| format!("read kernel BTF: {e}"))?;
+    let mut structs: Vec<&str> = mimi_types::OFFSET_TABLE
+        .iter()
+        .map(|(s, _, _)| *s)
+        .collect();
+    structs.sort_unstable();
+    structs.dedup();
+    let resolved = btf::member_offsets(&data, &structs)?;
+    let mut mismatches = Vec::new();
+    for (st, field, want) in mimi_types::OFFSET_TABLE {
+        match resolved.get(st).and_then(|m| m.get(field)).copied() {
+            Some(got) if got == want => {}
+            Some(got) => mismatches.push(format!("{st}.{field}: kernel {got} vs compiled {want}")),
+            None => mismatches.push(format!("{st}.{field}: absent from kernel BTF")),
+        }
+    }
+    Ok(mismatches)
+}
+
 fn main() -> anyhow::Result<()> {
     // Bump the memlock rlimit for older kernels' map accounting.
     let rlim = libc::rlimit {
@@ -52,6 +79,26 @@ fn main() -> anyhow::Result<()> {
     )))?;
     let program: &mut TracePoint = ebpf.program_mut("mimi").unwrap().try_into()?;
     program.load()?;
+
+    // Before attaching, check the probe's compiled task_struct/mm_struct offsets against this
+    // kernel's own BTF. On a mismatch the layout differs and the probe would read the wrong fields,
+    // so refuse rather than emit garbage (the hazard of any hardcoded-offset probe off its build
+    // kernel; CO-RE will remove the hardcoding, this makes it safe meanwhile). No BTF = cannot check.
+    match validate_offsets() {
+        Ok(m) if m.is_empty() => {}
+        Ok(m) => {
+            anyhow::bail!(
+                "kernel task_struct/mm_struct layout differs from mimi's compiled offsets; refusing \
+                 to attach so it cannot read the wrong fields (this kernel needs CO-RE). {}",
+                m.join("; ")
+            );
+        }
+        Err(e) => eprintln!(
+            "mimi: could not validate offsets against kernel BTF ({e}); proceeding on the compiled \
+             offsets, which are correct only on a matching kernel"
+        ),
+    }
+
     program.attach("sched", "sched_process_exec")?;
 
     let text = std::env::args().any(|a| a == "--text");
