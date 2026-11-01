@@ -6,10 +6,13 @@ structured events for banken to detect on. A separate binary from banken, so **b
 pure-Go with no kernel component**: the kernel-adjacent, `unsafe`-by-nature part lives here, in Rust,
 where the unsafe is small, marked, and checked by the kernel's BPF verifier.
 
-Status: **working PoC, graduating to the banken bar.** What runs today: a Rust + [aya](https://aya-rs.dev)
-program that loads on a live 6.18 kernel, attaches to `sched_process_exec`, and for every exec emits
-the process's argv plus its full ancestry (walking `task_struct->real_parent` to pid 1). One
-self-contained binary - aya embeds the BPF object - **no C**: the probe and the loader are both Rust.
+Status: **graduating to the banken bar.** A Rust + [aya](https://aya-rs.dev) program that attaches
+to `sched_process_exec` and, for every exec, captures the executable path, argv, uid/gid and the
+full ancestry (walking `task_struct->real_parent` to pid 1), and emits them as one OCSF-shaped JSON
+line banken ingests directly. One self-contained binary - aya embeds the BPF object - **no C**: the
+probe and the loader are both Rust. The probe assembles the event in a per-CPU scratch map (off the
+512-byte BPF stack) and counts any ring-buffer drops. (The live load on 6.x is the one step that
+still needs a privileged run; everything up to it is built and tested.)
 
 ## Architecture
 
@@ -28,8 +31,8 @@ flowchart LR
 
 mimi and banken are **decoupled**: they speak a wire schema, not linked code, so the sensor is
 swappable (mimi, or Falco/Tetragon via an adapter) and banken never grows a kernel component. The
-schema is the contract (`mimi-types`), and it maps onto banken's OCSF-shaped `process` /
-`parent_process` objects - the same nested-process model every EDR uses.
+schema is the contract (`mimi-types`): the loader emits banken's OCSF `process` / `parent_process`
+objects directly, the same nested-process model every EDR uses.
 
 banken consumes mimi as a **continuous stream** (not a polled log), so end-to-end detection latency
 is *capture + match*, not bounded by any scan interval - two independently-timed components would
@@ -39,17 +42,22 @@ measured number.
 ## Event schema (`mimi-types`)
 
 One `#[repr(C)]` layout shared no_std by the probe and std by the loader, so the two halves can never
-disagree on the bytes. An event is a process with its argv and its ancestry; the loader renders it as
-familiar fields:
+disagree on the bytes. The loader emits each event as one JSON line whose `process` object is
+banken's own OCSF process object (so it maps onto the brain with no translation); `--text` prints a
+human view instead.
 
-```
-process.name=ping process.pid=213541 process.cmdline="ping 8.8.8.8"
-process.parent.name=fish process.parent.pid=210139
-process.ancestry=fish(210139) < sshd-session(210138) < sshd(196136) < systemd(1)
+```json
+{"schema":"mimi/2","kind":"exec","time":"2026-11-02T00:00:00Z","capture_ns":0,
+ "process":{"pid":213541,"name":"ping","cmd_line":"ping 8.8.8.8",
+            "file":{"path":"/usr/bin/ping","name":"ping"},"user":{"uid":"1000","gid":"1000"},
+            "parent_process":{"pid":210139,"name":"fish"}},
+ "ancestry":[{"pid":213541,"name":"ping"},{"pid":210139,"name":"fish"},{"pid":1,"name":"systemd"}]}
 ```
 
-One level of `process.parent` is the standard (OCSF `parent_process`, SentinelOne `parent`); the full
-chain is a single `process.ancestry` path, not `.parent.parent.parent` nesting.
+`process`/`parent_process` are OCSF (one parent level, as OCSF / SentinelOne); the full chain is
+mimi's `ancestry` extension, not `.parent.parent` nesting. The `schema` version lets banken refuse
+or downgrade on skew, and the shared fixture (`testdata/mimi_event.golden.jsonl`) is tested on both
+sides so the two repos cannot drift (`just contract`).
 
 ## Dependencies
 
@@ -65,8 +73,13 @@ The **userspace builds on stable**; only the **probe needs a pinned nightly**, b
 has no prebuilt `core`, so aya builds it from source with `-Z build-std` (nightly-only). The nightly
 is pinned (`rust-toolchain.toml`) - frozen, reproducible - and its LLVM must match the `bpf-linker`
 mimi links with. nixpkgs' prebuilt `bpf-linker` lags, so build `bpf-linker 0.12` against nixpkgs'
-LLVM 23 (with `libLLVM.so` from the `lib` output on the linker path); see the build notes / the
-`mimi` [workbench](https://github.com/conor-sometimes/workbench) toolchain.
+LLVM 23 (with `libLLVM.so` from the `lib` output on the linker path). The painless path is the
+[workbench](https://github.com/conor-sometimes/workbench) env, which pins all of it (fenix-style
+nightly plus a nix-built `bpf-linker` 0.12 against LLVM 23, RPATH set), so there is no hand setup:
+
+```sh
+nix run github:conor-sometimes/workbench#mimi -- -c 'cargo build'   # the whole toolchain, pinned
+```
 
 ## Build and test
 
