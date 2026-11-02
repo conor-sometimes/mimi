@@ -1,8 +1,10 @@
+use anyhow::Context;
 use aya::{maps::RingBuf, programs::TracePoint};
 use std::io::{self, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod btf;
+mod preflight;
 
 // mimi: load the probe, attach it to sched_process_exec, and emit each exec event. The probe and
 // its BPF object are embedded in this binary by the build script. Parsing and rendering live in
@@ -26,19 +28,41 @@ fn monotonic_ns() -> i128 {
     ts.tv_sec as i128 * 1_000_000_000 + ts.tv_nsec as i128
 }
 
-// Whether an event-sink write/flush means the consumer is gone and the sensor should stop. BrokenPipe
-// is the normal "the reader closed" signal for a pipe sink: exit 0, no crash-loop under
-// Restart=on-failure. Any other write error means the sink is unusable (a full disk, say), so log it
-// and stop too rather than spin.
-fn is_gone(r: io::Result<()>) -> bool {
-    match r {
-        Ok(()) => false,
-        Err(ref e) if e.kind() == io::ErrorKind::BrokenPipe => true,
-        Err(e) => {
-            eprintln!("mimi: event sink write failed ({e}); stopping");
-            true
+// What a sink write/flush result means for the loop.
+enum Sink {
+    Ok,                   // written; keep going
+    ReaderGone,           // the consumer closed a pipe sink (BrokenPipe): a clean stop, exit 0
+    Fatal(anyhow::Error), // the sink is unusable after retries: stop with a clear non-zero exit
+}
+
+// Flush the sink, retrying a transient error with bounded backoff before giving up. A momentary
+// hiccup (a brief ENOSPC that log rotation clears, an EINTR) is ridden out rather than turned into a
+// crash-loop; a persistent failure (a full or read-only disk) becomes ONE clear line to stderr (the
+// journal) and a fatal exit, so the unit shows exactly why it stopped instead of an opaque loop.
+// BrokenPipe on a pipe sink is the normal "reader closed" signal: a clean stop, never an error.
+fn flush_sink(out: &mut dyn Write) -> Sink {
+    const MAX_ATTEMPTS: u32 = 5;
+    let mut delay = Duration::from_millis(100);
+    for attempt in 1..=MAX_ATTEMPTS {
+        match out.flush() {
+            Ok(()) => return Sink::Ok,
+            Err(ref e) if e.kind() == io::ErrorKind::BrokenPipe => return Sink::ReaderGone,
+            Err(e) if attempt == MAX_ATTEMPTS => {
+                return Sink::Fatal(anyhow::Error::from(e).context(
+                    "event sink still unwritable after retries -- likely a full or read-only disk at the sink path; free space or fix the mount (the unit restarts on-failure, so it recovers once the sink is writable again)",
+                ));
+            }
+            Err(e) => {
+                eprintln!(
+                    "mimi: event sink write failed ({e}); retry {attempt}/{MAX_ATTEMPTS} in {}ms",
+                    delay.as_millis()
+                );
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(Duration::from_secs(2));
+            }
         }
     }
+    unreachable!("the loop returns on the final attempt")
 }
 
 // --sink PATH, if given. Parses both `--sink PATH` and `--sink=PATH`.
@@ -110,10 +134,32 @@ fn main() -> anyhow::Result<()> {
     };
     let _ = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
 
+    let sink = sink_arg();
+
+    // `mimi --check`: run the preflight doctor and exit (0 if every hard dependency is met, non-zero
+    // otherwise). Loads nothing -- an operator can run it against a live box to see what to fix.
+    if std::env::args().any(|a| a == "--check") {
+        let checks = preflight::run(sink.as_deref());
+        if preflight::report(&checks) {
+            eprintln!("mimi check: OK -- all hard dependencies satisfied");
+            std::process::exit(0);
+        }
+        eprintln!("mimi check: FAILED -- fix the item(s) marked FAIL above, then re-run");
+        std::process::exit(1);
+    }
+
+    // Implicit preflight on every boot: a missing hard dependency (tracefs unreadable, no caps,
+    // unwritable sink) is a clear fatal with the fix, printed to stderr -> journal, BEFORE the opaque
+    // aya load path. This is what stops the "exit 1 with nothing useful in the journal" crash-loop.
+    preflight::preflight(sink.as_deref())?;
+
     let mut ebpf = aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
         env!("OUT_DIR"),
         "/mimi"
-    )))?;
+    )))
+    .context(
+        "loading the embedded BPF object (CO-RE relocation + map creation against this kernel). An EPERM here means missing CAP_BPF/CAP_PERFMON, kernel lockdown, or too-low RLIMIT_MEMLOCK; a BTF/relocation error means the kernel lacks /sys/kernel/btf/vmlinux (run `mimi --check`)",
+    )?;
 
     // Fill the probe's OFFSETS map from this kernel's BTF before it runs: the probe reads its
     // task_struct/mm_struct field offsets from here, so one binary adapts to each kernel's layout
@@ -122,15 +168,21 @@ fn main() -> anyhow::Result<()> {
     {
         let offs = resolve_offsets();
         let mut map: aya::maps::Array<_, u32> =
-            aya::maps::Array::try_from(ebpf.map_mut("OFFSETS").expect("OFFSETS map in the probe"))?;
+            aya::maps::Array::try_from(ebpf.map_mut("OFFSETS").expect("OFFSETS map in the probe"))
+                .context("accessing the probe's OFFSETS map")?;
         for (i, v) in offs.iter().enumerate() {
-            map.set(i as u32, *v, 0)?;
+            map.set(i as u32, *v, 0)
+                .context("writing the resolved field offsets into the OFFSETS map")?;
         }
     }
 
     let program: &mut TracePoint = ebpf.program_mut("mimi").unwrap().try_into()?;
-    program.load()?;
-    program.attach("sched", "sched_process_exec")?;
+    program.load().context(
+        "loading the tracepoint program into the kernel. An EPERM here means missing CAP_BPF/CAP_PERFMON or kernel lockdown; a verifier rejection points at a kernel/offset mismatch (run `mimi --check`)",
+    )?;
+    program.attach("sched", "sched_process_exec").context(
+        "attaching to the sched:sched_process_exec tracepoint. This reads the tracepoint id from tracefs (/sys/kernel/tracing, root-owned 0700), which a non-root user can only read with CAP_DAC_READ_SEARCH -- the exact capability whose absence caused the original crash-loop (run `mimi --check`)",
+    )?;
 
     let text = std::env::args().any(|a| a == "--text");
 
@@ -143,11 +195,14 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or(0);
     let offset_ns = wall_now - monotonic_ns();
 
-    let mut ring = RingBuf::try_from(ebpf.take_map("EVENTS").unwrap())?;
+    let mut ring = RingBuf::try_from(ebpf.take_map("EVENTS").unwrap()).context(
+        "creating the EVENTS ring buffer reader (needs CAP_BPF and sufficient RLIMIT_MEMLOCK)",
+    )?;
     // The probe counts events it had to drop because the ring was full (per CPU); surface that so
     // loss under a burst is visible and counted, not silent (the classic EDR blinding failure).
     let drops: aya::maps::PerCpuArray<_, u64> =
-        aya::maps::PerCpuArray::try_from(ebpf.take_map("DROPS").unwrap())?;
+        aya::maps::PerCpuArray::try_from(ebpf.take_map("DROPS").unwrap())
+            .context("accessing the DROPS counter map")?;
     let mut last_drops = 0u64;
     eprintln!("mimi: watching execs. Ctrl-C to stop.");
 
@@ -160,13 +215,17 @@ fn main() -> anyhow::Result<()> {
     // BrokenPipe we exit cleanly on, never the panic `println!` raises -- a panic would crash-loop
     // under Restart=on-failure). Flush after each drain so banken tailing the file sees every batch
     // promptly, not only when an 8K buffer fills.
-    let mut out: Box<dyn Write> = match sink_arg() {
+    let mut out: Box<dyn Write> = match &sink {
         Some(path) => {
             let f = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(&path)
-                .map_err(|e| anyhow::anyhow!("mimi: cannot open --sink {path}: {e}"))?;
+                .open(path)
+                .with_context(|| {
+                    format!(
+                        "opening the --sink file {path} for append (preflight checks writability; this is the real open). Make the path writable by the service user, or keep it under /var/log/mimi (systemd LogsDirectory owns it for the DynamicUser)"
+                    )
+                })?;
             Box::new(io::BufWriter::new(f))
         }
         None => Box::new(io::stdout()),
@@ -181,13 +240,23 @@ fn main() -> anyhow::Result<()> {
                     let wall = (offset_ns + lin.time_ns as i128).max(0) as u128;
                     mimi_types::render_mimi(&lin, &mimi_types::rfc3339_utc(wall))
                 };
-                if !line.is_empty() && is_gone(writeln!(out, "{line}")) {
-                    return Ok(());
+                if !line.is_empty() {
+                    match writeln!(out, "{line}") {
+                        Ok(()) => {}
+                        Err(ref e) if e.kind() == io::ErrorKind::BrokenPipe => return Ok(()),
+                        Err(e) => {
+                            return Err(
+                                anyhow::Error::from(e).context("writing an event line to the sink")
+                            );
+                        }
+                    }
                 }
             }
         }
-        if is_gone(out.flush()) {
-            return Ok(());
+        match flush_sink(out.as_mut()) {
+            Sink::Ok => {}
+            Sink::ReaderGone => return Ok(()),
+            Sink::Fatal(e) => return Err(e),
         }
         if let Ok(per_cpu) = drops.get(&0, 0) {
             let total: u64 = per_cpu.iter().sum();
