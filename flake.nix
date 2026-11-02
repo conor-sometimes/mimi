@@ -72,6 +72,26 @@
             doCheck = false;
           };
 
+          # aya-build 0.2.0 (aya-rs/aya, tag aya-build-v0.2.0, `build_ebpf`) routes every rustc/cargo
+          # invocation through `rustup run <toolchain> ...` the moment it finds a `rustup` on PATH --
+          # including the `rustc_version` probe that fails with "failed to get rustc version meta". This
+          # shell provides the nightly DIRECTLY via fenix: there is no rustup, and the three-way LLVM
+          # coherence (see the header) depends on exactly nightly-2026-10-31, never whatever a `rustup
+          # toolchain install nightly` would pull. But `nix develop` keeps the ambient PATH, and GitHub's
+          # runners ship a stray rustup with no `nightly` installed, so aya-build's probe dies there.
+          # This shim shadows any ambient rustup (devShell bins are prepended to PATH): it answers
+          # `rustup run <toolchain> <cmd...>` by exec'ing <cmd...> against the fenix toolchain already on
+          # PATH, so the build stays hermetic -- the nix toolchain, never a rustup-fetched one -- whether
+          # or not the host has a rustup. Drop the shim once aya-build can use the ambient toolchain.
+          rustup-shim = pkgs.writeShellScriptBin "rustup" ''
+            if [ "$1" = "run" ] && [ "$#" -ge 3 ]; then
+              shift 2   # drop `run` and the toolchain name; the fenix toolchain on PATH is the only one
+              exec "$@"
+            fi
+            echo "rustup-shim: only 'rustup run <toolchain> <cmd...>' is supported in this hermetic shell (got: $*)" >&2
+            exit 1
+          '';
+
           craneLib = (crane.mkLib pkgs).overrideToolchain (_: toolchain);
 
           # The self-contained mimi binary: the loader with the BPF probe embedded. build.rs drives
@@ -104,6 +124,7 @@
             pkgs
             toolchain
             bpf-linker
+            rustup-shim
             mimiPackage
             ;
         };
@@ -155,10 +176,13 @@
         in
         {
           # build.rs finds bpf-linker on PATH; mkShell's stdenv supplies cc for the userspace link.
+          # rustup-shim shadows any ambient rustup so aya-build 0.2.0 drives the fenix toolchain
+          # directly rather than a (missing) rustup-managed `nightly` -- see its note above.
           default = s.pkgs.mkShell {
             packages = [
               s.toolchain
               s.bpf-linker
+              s.rustup-shim
             ];
           };
         }
