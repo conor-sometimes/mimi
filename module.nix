@@ -55,7 +55,14 @@ in
         # fails to set up under DynamicUser (the manager opens the fd before the LogsDirectory path
         # exists -- exit 209/STDOUT). mimi's status and diagnostics go to the journal instead.
         ExecStart = "${lib.getExe cfg.package} --sink ${cfg.sink}";
+        # Events go to the --sink file (mimi opens it itself); mimi's status, preflight self-check,
+        # and every error line go to stderr. Route BOTH stdout and stderr to the journal so
+        # `journalctl -u mimi` shows the real failure (a missing capability, unreadable tracefs, an
+        # unwritable sink) -- the original crash-loop showed only "exit 1" because stderr inherited an
+        # append: sink. StandardError is set explicitly (not left to inherit StandardOutput) so a
+        # later change to StandardOutput can never again bury mimi's diagnostics in the event file.
         StandardOutput = "journal";
+        StandardError = "journal";
         LogsDirectory = lib.mkIf (lib.hasPrefix "/var/log/mimi" cfg.sink) "mimi";
         # The default sink lives in LogsDirectory (writable, owned by the DynamicUser). A sink set
         # elsewhere needs its directory made writable and pre-created by the operator.
