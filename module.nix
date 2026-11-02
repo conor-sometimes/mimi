@@ -70,14 +70,16 @@ in
         Restart = "on-failure";
         RestartSec = 2;
 
-        # Loading a tracepoint program and reading a ring buffer needs CAP_BPF + CAP_PERFMON.
-        # Attaching the tracepoint also means reading its numeric id from tracefs
-        # (/sys/kernel/tracing, root-owned 0700), which a non-root DynamicUser can only read with
-        # CAP_DAC_READ_SEARCH (the same read-only bypass banken uses for root-owned logs). Run as an
-        # unprivileged dynamic user with just those three ambient, rather than as root.
+        # Loading a tracepoint program and reading a ring buffer needs CAP_BPF + CAP_PERFMON;
+        # reading the tracepoint id from tracefs (/sys/kernel/tracing, root-owned 0700) needs
+        # CAP_DAC_READ_SEARCH. On a HARDENED host those split BPF caps are not enough: with
+        # kernel.unprivileged_bpf_disabled=1 and kernel.perf_event_paranoid=3 (nixos-hardening),
+        # BPF_MAP_CREATE and the perf attach return EPERM unless the process holds CAP_SYS_ADMIN,
+        # which bypasses both gates. A sysctl is kernel-wide and a unit capability cannot override
+        # it, so the fix lives here, scoped to this one dynamic-user service, not host-wide.
         DynamicUser = true;
-        AmbientCapabilities = [ "CAP_BPF" "CAP_PERFMON" "CAP_DAC_READ_SEARCH" ];
-        CapabilityBoundingSet = [ "CAP_BPF" "CAP_PERFMON" "CAP_DAC_READ_SEARCH" ];
+        AmbientCapabilities = [ "CAP_BPF" "CAP_PERFMON" "CAP_SYS_ADMIN" "CAP_DAC_READ_SEARCH" ];
+        CapabilityBoundingSet = [ "CAP_BPF" "CAP_PERFMON" "CAP_SYS_ADMIN" "CAP_DAC_READ_SEARCH" ];
         LimitMEMLOCK = "infinity";
 
         NoNewPrivileges = true;
