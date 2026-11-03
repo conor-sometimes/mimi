@@ -8,13 +8,16 @@
 # fails on exactly that regression.
 #
 #   nix build .#checks.x86_64-linux.vm -L    (needs KVM)
-{ pkgs, mimiModule }:
+# mimiPackage overrides the service package (the vm-musl check passes the fully-static musl build,
+# to prove the STATIC binary loads the probe and emits OCSF); null keeps the module default (gnu).
+{ pkgs, mimiModule, mimiPackage ? null, name ? "mimi-unit" }:
 pkgs.testers.runNixOSTest {
-  name = "mimi-unit";
+  inherit name;
 
-  nodes.machine = {
+  nodes.machine = { lib, ... }: {
     imports = [ mimiModule ];
     services.mimi.enable = true;
+    services.mimi.package = lib.mkIf (mimiPackage != null) mimiPackage;
     virtualisation.memorySize = 2048;
   };
 

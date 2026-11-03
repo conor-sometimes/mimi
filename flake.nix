@@ -49,6 +49,23 @@
                 "clippy"
               ];
 
+          # The same pinned nightly PLUS the musl target's std, combined into one sysroot, so the
+          # userspace crate can build `--target x86_64-unknown-linux-musl` into a fully-static,
+          # copy-and-run binary for any Linux distro (banken+mimi shipping to a non-NixOS host), not
+          # just NixOS. The musl rust-std must be the SAME nightly as `toolchain`: the probe's
+          # build-std and the userspace std have to come from one compiler, so it reuses the exact
+          # nightly date + manifest sha256 (fenix keys one hash per nightly, covering all targets).
+          # Only the userspace crate (`-p mimi`) goes to musl; mimi-ebpf still targets bpfel, so this
+          # shell still needs bpf-linker + the rustup-shim (see the `.#musl` devShell below).
+          muslToolchain = fenix.packages.${system}.combine [
+            toolchain
+            (fenix.packages.${system}.targets."x86_64-unknown-linux-musl".toolchainOf {
+              channel = "nightly";
+              date = "2026-10-31";
+              sha256 = "sha256-07UyQu51OrDSHsy37ts4KC/NChHMfh5ZPY9QrihIXYo=";
+            }).rust-std
+          ];
+
           # bpf-linker 0.12 against LLVM 23.1 (nixpkgs ships 0.9.15). It selects LLVM via a
           # `llvm-<major>` feature (llvm-config from the dev output) and links libLLVM.so (lib output).
           bpf-linker = pkgs.rustPlatform.buildRustPackage rec {
@@ -93,12 +110,16 @@
           '';
 
           craneLib = (crane.mkLib pkgs).overrideToolchain (_: toolchain);
+          # The same crane, but the musl sysroot -- for the fully-static ship binary below.
+          craneLibMusl = (crane.mkLib pkgs).overrideToolchain (_: muslToolchain);
 
           # The self-contained mimi binary: the loader with the BPF probe embedded. build.rs drives
           # a cargo-in-cargo `-Z build-std` compile of the probe for the BPF target, so it needs the
           # nightly + rust-src (the toolchain) and bpf-linker on PATH (nativeBuildInputs). Building
-          # only -p mimi keeps mimi-ebpf a build-script artifact, not a host member.
-          mimiPackage = craneLib.buildPackage {
+          # only -p mimi keeps mimi-ebpf a build-script artifact, not a host member. The musl ship
+          # build (mimiMuslPackage) is the same recipe with the musl sysroot and target, so the args
+          # are shared -- only the toolchain and CARGO_BUILD_TARGET differ.
+          mimiArgs = {
             pname = "mimi";
             version = "0.1.0";
             src = craneLib.cleanCargoSource ./.;
@@ -118,6 +139,21 @@
               ];
             };
           };
+          mimiPackage = craneLib.buildPackage mimiArgs;
+
+          # The fully-static musl ship binary, built hermetically so a VM test (checks.vm-musl) can
+          # prove the STATIC binary -- not just the gnu one -- still loads the probe and emits OCSF.
+          # Only the userspace crate targets musl; aya-build's inner cargo targets bpfel explicitly,
+          # so CARGO_BUILD_TARGET here does not reach the probe compile, and crt-static (.cargo/
+          # config.toml) is target-scoped. The userspace is pure Rust (aya loads via syscalls, libc
+          # is only the memlock bump), so Rust links a self-contained musl -- no musl C toolchain.
+          mimiMuslPackage = craneLibMusl.buildPackage (
+            mimiArgs
+            // {
+              pname = "mimi-musl";
+              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+            }
+          );
         in
         {
           inherit
@@ -125,7 +161,9 @@
             toolchain
             bpf-linker
             rustup-shim
+            muslToolchain
             mimiPackage
+            mimiMuslPackage
             ;
         };
     in
@@ -149,6 +187,7 @@
         in
         {
           mimi = s.mimiPackage;
+          mimi-musl = s.mimiMuslPackage;
           default = s.mimiPackage;
         }
       );
@@ -160,13 +199,27 @@
       checks = nixpkgs.lib.genAttrs [ "x86_64-linux" ] (
         system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          s = perSystem system;
+          pkgs = s.pkgs;
           args = {
             inherit pkgs;
             mimiModule = self.nixosModules.default;
           };
         in
-        { vm = import ./tests/vm.nix args; } // import ./tests/kernels.nix args
+        {
+          vm = import ./tests/vm.nix args;
+          # The same unit test, but forcing the fully-static MUSL binary as the service package: it
+          # proves the static ship binary still loads the probe (CO-RE off the VM kernel's BTF) and
+          # emits an OCSF exec event -- musl changes libc, not how aya loads BPF (syscalls).
+          vm-musl = import ./tests/vm.nix (
+            args
+            // {
+              name = "mimi-unit-musl";
+              mimiPackage = s.mimiMuslPackage;
+            }
+          );
+        }
+        // import ./tests/kernels.nix args
       );
 
       devShells = forAllSystems (
@@ -181,6 +234,20 @@
           default = s.pkgs.mkShell {
             packages = [
               s.toolchain
+              s.bpf-linker
+              s.rustup-shim
+            ];
+          };
+
+          # The fully-static musl ship build:
+          #   nix develop .#musl -c cargo build --release --target x86_64-unknown-linux-musl -p mimi
+          # produces the copy-and-run binary for any Linux distro. It is the default shell with the
+          # toolchain swapped for muslToolchain (host nightly + rust-src + the musl std): build.rs
+          # still compiles the mimi-ebpf probe for bpfel, so bpf-linker and the rustup-shim are still
+          # required here. Only the userspace crate (`-p mimi`) is built for musl.
+          musl = s.pkgs.mkShell {
+            packages = [
+              s.muslToolchain
               s.bpf-linker
               s.rustup-shim
             ];
