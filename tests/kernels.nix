@@ -18,6 +18,10 @@ let
     "kernel-6_1" = pkgs.linuxPackages_6_1;
     "kernel-6_6" = pkgs.linuxPackages_6_6;
     "kernel-6_12" = pkgs.linuxPackages_6_12;
+    # Newest mainline nixpkgs ships: a new mainline kernel is covered automatically on the next
+    # nixpkgs bump. 6.1 is the floor of this matrix: 5.10 and 5.15 are both gone from the pinned
+    # nixpkgs (EOL), so nothing older can be exercised without a pinned external kernel.
+    "kernel-latest" = pkgs.linuxPackages_latest;
   };
 
   mk = name: kpkgs: pkgs.testers.runNixOSTest {
