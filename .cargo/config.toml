@@ -1,0 +1,15 @@
+# Build targets for mimi. The default host build (x86_64/aarch64-linux-gnu) needs nothing here. The
+# musl entry is the ship target (so banken+mimi copy-and-run on a non-NixOS distro): a fully-static
+# mimi userspace binary. crt-static is already the default for musl targets; it is stated explicitly
+# so the intent is visible and cannot be flipped off by a stray profile. Only the userspace crate
+# (`-p mimi`) is built for musl -- the mimi-ebpf probe still targets bpfel (build.rs/aya-build), and
+# these rustflags are target-scoped so they never touch that inner BPF compile. The userspace is
+# ordinary Rust (aya loads via syscalls, libc is only the memlock bump), so no musl C toolchain or
+# linker override is needed -- Rust links a self-contained musl.
+#
+# Build it with: nix develop .#musl -c cargo build --release --target x86_64-unknown-linux-musl -p mimi
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
