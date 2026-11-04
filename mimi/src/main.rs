@@ -123,7 +123,39 @@ fn resolve_offsets() -> [u32; mimi_types::OFFSET_COUNT as usize] {
             }
         };
     }
+    // The tracepoint record offset is not a BTF struct field, so it is resolved
+    // from tracefs separately from the loop above.
+    out[mimi_types::OFF_IDX_FILENAME_LOC as usize] = filename_loc_offset();
     out
+}
+
+/// The sched_process_exec `__data_loc filename` byte offset for the RUNNING
+/// kernel, read from its own tracefs `.../format`. This is a tracepoint record
+/// layout, not a struct in vmlinux BTF, so it cannot come from member_offsets:
+/// the common-tracepoint header is 8 bytes on mainline 6.x but 12 on RHEL-9's
+/// 5.14, so the field sits at 8 there and 12 here. Reading it per-kernel is what
+/// the old hardcoded offset got wrong (empty path on 5.14). Falls back to the
+/// mainline offset when tracefs is unreadable.
+fn filename_loc_offset() -> u32 {
+    let fallback = mimi_types::FILENAME_LOC_DEFAULT;
+    for base in ["/sys/kernel/tracing", "/sys/kernel/debug/tracing"] {
+        let path = format!("{base}/events/sched/sched_process_exec/format");
+        let Ok(fmt) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(v) = mimi_types::parse_filename_offset(&fmt) {
+            if v != fallback {
+                eprintln!(
+                    "mimi: sched_process_exec filename at record offset {v} on this kernel (mainline 6.x is {fallback}); using tracefs"
+                );
+            }
+            return v;
+        }
+    }
+    eprintln!(
+        "mimi: could not read the sched_process_exec format from tracefs; using the mainline filename offset {fallback} (wrong on a shifted-header kernel such as RHEL-9's 5.14)"
+    );
+    fallback
 }
 
 fn main() -> anyhow::Result<()> {

@@ -54,8 +54,19 @@ pub const OFF_IDX_COMM: u32 = 2;
 pub const OFF_IDX_MM: u32 = 3;
 pub const OFF_IDX_ARG_START: u32 = 4;
 pub const OFF_IDX_ARG_END: u32 = 5;
+/// The byte offset of the `__data_loc filename` field within the
+/// sched_process_exec tracepoint record. Unlike the entries above it is NOT a
+/// BTF struct field: it is the tracepoint record layout, which the loader reads
+/// from this kernel's own tracefs `.../format` (the common-tracepoint header is
+/// 8 bytes on mainline 6.x but 12 on RHEL-9's 5.14, shifting every field). Its
+/// fallback is FILENAME_LOC_DEFAULT.
+pub const OFF_IDX_FILENAME_LOC: u32 = 6;
 /// Number of entries in the OFFSETS map.
-pub const OFFSET_COUNT: u32 = 6;
+pub const OFFSET_COUNT: u32 = 7;
+
+/// The sched_process_exec `__data_loc filename` record offset on a mainline 6.x
+/// kernel, used when the loader cannot read tracefs. RHEL-9's 5.14 uses 12.
+pub const FILENAME_LOC_DEFAULT: u32 = 8;
 
 /// One process in the ancestry chain.
 #[repr(C)]
@@ -126,5 +137,6 @@ extern crate std;
 mod user;
 #[cfg(feature = "user")]
 pub use user::{
-    cmdline_str, comm_str, filename_str, parse, render_json, render_mimi, render_text, rfc3339_utc,
+    cmdline_str, comm_str, filename_str, parse, parse_filename_offset, render_json, render_mimi,
+    render_text, rfc3339_utc,
 };
