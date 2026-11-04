@@ -28,14 +28,14 @@ fn off(idx: u32) -> usize {
     OFFSETS.get(idx).copied().unwrap_or(0) as usize
 }
 
-// sched_process_exec tracepoint record layout (tracefs
-// events/sched/sched_process_exec/format; stable across 5.x/6.x):
-//   common_type u16 @0, common_flags u8 @2, common_preempt_count u8 @3, common_pid i32 @4,
-//   __data_loc char[] filename u32 @8, pid i32 @12, old_pid i32 @16.
-// A __data_loc is (len << 16) | offset, the offset being from the start of the record (= the
-// tracepoint ctx pointer), so the path lives at ctx + (loc & 0xffff). Confirmed live on 6.18.59:
-// a load captured file.path=/run/current-system/sw/bin/timeout for the right exec.
-const OFF_FILENAME_LOC: usize = 8;
+// sched_process_exec tracepoint record: the `__data_loc char[] filename` field holds
+// (len << 16) | offset, the offset being from the start of the record (= the tracepoint ctx
+// pointer), so the path lives at ctx + (loc & 0xffff). The byte offset of the __data_loc field
+// itself is NOT constant across kernels: the common-tracepoint header is 8 bytes on mainline 6.x
+// (filename @8, pid @12, old_pid @16) but 12 on RHEL-9's 5.14 (filename @12), so the probe reads it
+// from the OFFSETS map (index OFF_IDX_FILENAME_LOC), which the loader fills from this kernel's own
+// tracefs `.../format`. Hardcoding it to 8 read the data_loc out of the common header on 5.14 and
+// captured an empty path.
 
 #[map]
 static EVENTS: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
@@ -81,7 +81,7 @@ fn run(ctx: &TracePointContext) -> Result<(), i64> {
 
     // Executed program path from the tracepoint's own record (see OFF_FILENAME_LOC). The helper
     // stops at the NUL and is bounded by FILENAME_LEN; a failed read leaves filename all-NUL.
-    if let Ok(loc) = unsafe { ctx.read_at::<u32>(OFF_FILENAME_LOC) } {
+    if let Ok(loc) = unsafe { ctx.read_at::<u32>(off(mimi_types::OFF_IDX_FILENAME_LOC)) } {
         let src = unsafe { (ctx.as_ptr() as *const u8).add((loc & 0xffff) as usize) };
         let _ = unsafe { bpf_probe_read_kernel_str_bytes(src, &mut lin.filename) };
     }

@@ -225,10 +225,49 @@ pub fn rfc3339_utc(epoch_ns: u128) -> String {
     format!("{year:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}.{nanos:09}Z")
 }
 
+/// The byte offset of the `__data_loc char[] filename` field within the
+/// sched_process_exec tracepoint record, parsed from that tracepoint's tracefs
+/// `format` file. This is NOT a BTF struct field: it is the tracepoint record
+/// layout, and the common-tracepoint header is 8 bytes on mainline 6.x but 12
+/// on RHEL-9's 5.14, so the field sits at 8 there and 12 here. Reading it from
+/// the running kernel (rather than hardcoding 8) is what makes the probe's path
+/// capture correct on both. `None` when the field is absent.
+pub fn parse_filename_offset(format: &str) -> Option<u32> {
+    for line in format.lines() {
+        // e.g. "\tfield:__data_loc char[] filename;\toffset:12;\tsize:4;\tsigned:1;"
+        if !(line.contains("__data_loc") && line.contains("filename;")) {
+            continue;
+        }
+        let rest = line.split("offset:").nth(1)?;
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        return rest[..end].parse::<u32>().ok();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Ancestor, COMM_LEN, Lineage};
+
+    #[test]
+    fn filename_offset_reads_the_per_kernel_record_layout() {
+        // Real sched_process_exec `format` on a mainline 6.x kernel: filename @8.
+        let mainline = "name: sched_process_exec\nID: 316\nformat:\n\tfield:unsigned short common_type;\toffset:0;\tsize:2;\tsigned:0;\n\tfield:int common_pid;\toffset:4;\tsize:4;\tsigned:1;\n\n\tfield:__data_loc char[] filename;\toffset:8;\tsize:4;\tsigned:1;\n\tfield:pid_t pid;\toffset:12;\tsize:4;\tsigned:1;\n\tfield:pid_t old_pid;\toffset:16;\tsize:4;\tsigned:1;\n";
+        assert_eq!(parse_filename_offset(mainline), Some(8));
+
+        // Real format on RHEL-9's 5.14: the header is 4 bytes larger, filename @12.
+        let rhel = "name: sched_process_exec\nformat:\n\tfield:int common_pid;\toffset:4;\tsize:4;\tsigned:1;\n\n\tfield:__data_loc char[] filename;\toffset:12;\tsize:4;\tsigned:1;\n\tfield:pid_t pid;\toffset:16;\tsize:4;\tsigned:1;\n\tfield:pid_t old_pid;\toffset:20;\tsize:4;\tsigned:1;\n";
+        assert_eq!(parse_filename_offset(rhel), Some(12));
+
+        // No filename field -> None (the loader then uses its fallback).
+        assert_eq!(
+            parse_filename_offset("name: x\nformat:\n\tfield:int common_pid;\toffset:4;\n"),
+            None
+        );
+    }
 
     fn comm(name: &str) -> [u8; COMM_LEN] {
         let mut c = [0u8; COMM_LEN];
