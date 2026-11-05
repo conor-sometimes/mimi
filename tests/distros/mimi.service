@@ -1,0 +1,72 @@
+# mimi on a vendor (non-NixOS) guest: the hardened unit mimi's NixOS module
+# (services.mimi) generates, hand-written here for a distro that has no Nix.
+# It mirrors module.nix's serviceConfig one-for-one, with two vendor
+# adaptations: ExecStart names an absolute installed path (not a /nix/store
+# getExe), and the sink path is written out literally instead of an option.
+#
+# mimi is a long-running SERVICE: it loads the eBPF tracepoint probe once (CO-RE
+# off this kernel's own BTF) and streams OCSF-shaped exec events continuously to
+# the --sink file for banken to tail. It is a listener only; it never enforces.
+[Unit]
+Description=mimi: eBPF telemetry sensor for banken
+Documentation=https://github.com/conor-sometimes/mimi
+After=network.target
+
+[Service]
+Type=exec
+# mimi writes the OCSF event stream to the sink file itself (--sink), in its own
+# writable LogsDirectory (/var/log/mimi). It does NOT use StandardOutput=append:,
+# which fails under DynamicUser (the manager opens the fd before LogsDirectory
+# exists -- exit 209/STDOUT). mimi's status and diagnostics go to the journal.
+ExecStart=/usr/local/bin/mimi --sink /var/log/mimi/events.jsonl
+# Events go to --sink; mimi's status, preflight self-check and every error line
+# go to stderr. Route BOTH to the journal so `journalctl -u mimi` shows the real
+# failure (a missing capability, unreadable tracefs, an unwritable sink).
+StandardOutput=journal
+StandardError=journal
+# systemd creates /var/log/mimi, owned by the DynamicUser, writable.
+LogsDirectory=mimi
+Restart=on-failure
+RestartSec=2
+
+# Loading a tracepoint program and reading a ring buffer needs CAP_BPF +
+# CAP_PERFMON (kernel 5.8+); reading the tracepoint id from tracefs
+# (/sys/kernel/tracing, root-owned 0700) needs CAP_DAC_READ_SEARCH. On a kernel
+# that gates unprivileged BPF/perf (kernel.unprivileged_bpf_disabled,
+# kernel.perf_event_paranoid -- Ubuntu ships these restrictive), the split BPF
+# caps are not enough: BPF_MAP_CREATE and the perf attach return EPERM unless
+# the process also holds CAP_SYS_ADMIN, which bypasses both gates. Scoped to
+# this one dynamic-user service, never host-wide.
+DynamicUser=true
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+LimitMEMLOCK=infinity
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native
+SystemCallFilter=@system-service bpf perf_event_open
+SystemCallErrorNumber=EPERM
+UMask=0077
+# An attacker who OOMs the box must not reap the sensor.
+OOMScoreAdjust=-900
+
+[Install]
+WantedBy=multi-user.target
